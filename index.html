@@ -36,6 +36,10 @@
       <button id="pressureButton">Pressure Field</button>
       <button id="vorticityButton">Vorticity Field</button>
       <button id="tracerButton">Tracer Particles</button>
+      <!-- NEW: Checkbox to enable/disable tracer particles (default off) -->
+      <br>
+      <label for="tracerEnabledCheckbox">Enable Tracer Particles:</label>
+      <input type="checkbox" id="tracerEnabledCheckbox">
       <h3>Legend</h3>
       <!-- Gradient legend with 10 ticks -->
       <canvas id="legendCanvas" width="200" height="30"></canvas>
@@ -184,6 +188,9 @@
     // Global variable to control dt scaling based on residuals (default disabled)
     let residualScalingEnabled = false;
 
+    // NEW: Global flag to control tracer particles (default off)
+    let tracersEnabled = false;
+
     function precomputeObstacleMask() {
       obstacleMask = new Array(Nx * Ny).fill(false);
       for (let j = 0; j < Ny; j++){
@@ -207,10 +214,10 @@
     function initSimulation() {
       simulationStepCount = 0;
       currentInletVelocity = 0;
-      // Allocate arrays for staggered grid:
-      u = new Float32Array((Nx+1) * Ny);    // u: (Nx+1) columns, Ny rows
-      v = new Float32Array(Nx * (Ny+1));      // v: Nx columns, (Ny+1) rows
-      p = new Float32Array(Nx * Ny);          // p: Nx x Ny
+      // Allocate arrays for the staggered grid:
+      u = new Float32Array((Nx+1) * Ny);
+      v = new Float32Array(Nx * (Ny+1));
+      p = new Float32Array(Nx * Ny);
       
       // --- Pre-allocate temporary buffers ---
       uOld = new Float32Array(u.length);
@@ -221,13 +228,17 @@
       pPrime    = new Float32Array(Nx * Ny);
       pPrime_new = new Float32Array(Nx * Ny);
       
-      // USE precomputed obstacle mask:
+      // Use precomputed obstacle mask:
       obstacle = obstacleMask;
       
       residualHistory = [];
       residualText.value = "";
-      // NEW: Initialize tracer particles
-      initTracers();
+      // NEW: Initialize tracer particles only if tracers are enabled
+      if (tracersEnabled) {
+        initTracers();
+      } else {
+        tracers = [];
+      }
       
       drawSimulation();
       drawLegend();
@@ -756,9 +767,16 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       if (currentVisualization === "tracer") {
+         // NEW: If tracers are disabled, show a message instead
+         if (!tracersEnabled) {
+           ctx.font = "20px Arial";
+           ctx.fillStyle = "red";
+           ctx.fillText("Tracer particles are disabled.", canvas.width / 2 - 100, canvas.height / 2);
+           return; // Skip drawing tracer particles
+         }
          // Compute grid mapping as before
          const cellSize = canvas.width / Nx;
-         const domainWidth = Nx * cellSize; // equals canvas.width
+         const domainWidth = Nx * cellSize;
          const domainHeight = Ny * cellSize;
          const offsetX = (canvas.width - domainWidth) / 2;
          const offsetY = (canvas.height - domainHeight) / 2;
@@ -977,7 +995,13 @@
     function simulationLoop() {
       if(!simulationRunning) return;
       updateSimulation();
-      updateTracers(dt);
+      // NEW: Update tracers only when enabled
+      if (tracersEnabled) {
+         updateTracers(dt);
+         if (simulationStepCount % tracerInjectionInterval === 0) {
+            injectTracers();
+         }
+      }
       drawSimulation();
       drawResidualGraph();
       drawLegend();
@@ -1041,6 +1065,17 @@
     // Event listener to update the scheme variable when the user selects a different option
     velocitySchemeSelect.addEventListener("change", function() {
       currentVelocityScheme = velocitySchemeSelect.value;
+    });
+
+    // NEW: Event listener for the tracer enable/disable checkbox
+    const tracerEnabledCheckbox = document.getElementById("tracerEnabledCheckbox");
+    tracerEnabledCheckbox.addEventListener("change", function() {
+      tracersEnabled = tracerEnabledCheckbox.checked;
+      if (tracersEnabled) {
+        initTracers();
+      } else {
+        tracers = [];
+      }
     });
 
     // Initialize simulation when page loads
@@ -1271,20 +1306,6 @@
         let y = (j + 0.5) * dy; // place tracer at the center of the inlet cell face
         tracers.push({ x: x, y: y, initialY: y });
       }
-    }
-
-    // Update the simulation loop to inject new tracers at regular intervals
-    function simulationLoop() {
-      if(!simulationRunning) return;
-      updateSimulation();
-      updateTracers(dt);
-      if (simulationStepCount % tracerInjectionInterval === 0) {
-         injectTracers();
-      }
-      drawSimulation();
-      drawResidualGraph();
-      drawLegend();
-      requestAnimationFrame(simulationLoop);
     }
   </script>
 </body>
