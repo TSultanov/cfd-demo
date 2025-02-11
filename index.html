@@ -56,12 +56,12 @@
       <h2>Time Step Control</h2>
       <label for="timeStepInput">Time Step (s):</label>
       <input type="number" id="timeStepInput" step="0.001" value="0.01">
-      <p>Current dt: <span id="currentDtValue">0.01</span></p>
+      <p>Current dt: <span id="currentDtValue">0.5</span></p>
 
       <!-- NEW: Updated Viscosity Control Section -->
       <h2>Viscosity Control</h2>
       <label for="viscosityInput">Viscosity (m²/s):</label>
-      <input type="number" id="viscosityInput" min="0.001" max="0.1" step="0.001" value="0.01">
+      <input type="number" id="viscosityInput" min="0.0001" max="0.1" step="0.001" value="0.001">
 
       <!-- NEW: Pressure Solver Selection -->
       <h2>Pressure Solver</h2>
@@ -223,13 +223,6 @@
       uOld.set(u);
       vOld.set(v);
       
-      // Automatic time step control based on the CFL condition with limited dt change
-      let dt_prev = dt;
-      let dt_new = computeAutomaticTimeStep();
-      const maxIncreaseFactor = 1.1; // maximum allowed increase: 10% per time step
-      dt = (dt_prev <= 0 || dt_new < dt_prev) ? dt_new : Math.min(dt_new, dt_prev * maxIncreaseFactor);
-      document.getElementById("currentDtValue").textContent = dt.toFixed(3);
-      
       // Gradually ramp up inlet velocity to avoid shocks
       if(simulationStepCount < rampUpSteps) {
         currentInletVelocity = (simulationStepCount / rampUpSteps) * targetInletVelocity;
@@ -286,6 +279,32 @@
       residualHistory.push({step: simulationStepCount, residual: maxResidualU});
       residualHistory.push({step: simulationStepCount, residual: maxResidualV});
       residualHistory.push({step: simulationStepCount, residual: maxPressureResidual});
+
+      // ===========================================================================
+      // NEW: Adjust the global time step (dt) for the next simulation step based on:
+      //       - the CFL condition (velocity-based) from computeAutomaticTimeStep()
+      //       - the pressure residual (reduce dt if pressure error is high)
+      // ===========================================================================
+      const previousDt = dt;
+      let dt_cfl = computeAutomaticTimeStep(); // dt based solely on CFL
+      
+      // Define a pressure tolerance (adjust as needed)
+      const pressureTol = 1e-3;
+      let dt_pressure = dt_cfl;
+      if(maxPressureResidual > pressureTol) {
+          // Scale dt based on the pressure error ratio using the maximum pressure residual from substeps.
+          dt_pressure = dt_cfl * (pressureTol / (maxPressureResidual + 1e-10));
+      }
+      // Choose the more restrictive time step
+      let newDt = Math.min(dt_cfl, dt_pressure);
+      
+      // Limit dt increase compared to the previous dt (to keep dt changes smooth)
+      const maxIncreaseFactor = 1.1;
+      if(newDt > previousDt) {
+          newDt = Math.min(newDt, previousDt * maxIncreaseFactor);
+      }
+      dt = newDt;
+      document.getElementById("currentDtValue").textContent = dt.toFixed(3);
     }
 
     /******************** PISO Substep Function (Staggered Grid) ********************/
