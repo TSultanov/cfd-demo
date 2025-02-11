@@ -340,71 +340,97 @@
             uStar[idx] = 0;
             continue;
           }
-          let idx_e = (i+1) + j * (Nx+1);
-          let idx_w = (i-1) + j * (Nx+1);
-
-          // --- UPDATED: Compute du_dx using selected upwind scheme ---
-          let du_dx;
-          if (currentVelocityScheme === "second") {
-            if(u[idx] >= 0) {
-              if(i > 1) {
-                let idx_ww = (i-2) + j*(Nx+1);
-                du_dx = (3*u[idx] - 4*u[idx_w] + u[idx_ww]) / (2*dx);
-              } else {
-                // Less than two points available: fall back to first order
-                du_dx = (u[idx] - u[idx_w]) / dx;
-              }
-            } else {
-              if(i <= Nx-3) {
-                let idx_ee = (i+2) + j*(Nx+1);
-                du_dx = (-u[idx_ee] + 4*u[idx_e] - 3*u[idx]) / (2*dx);
-              } else {
-                // Fall back to first order near the boundary
-                du_dx = (u[idx_e] - u[idx]) / dx;
-              }
-            }
-          } else {
-            // First-order upwind (original implementation)
-            if(u[idx] >= 0) {
-              du_dx = (u[idx] - u[idx_w]) / dx;
-            } else {
-              du_dx = (u[idx_e] - u[idx]) / dx;
-            }
-          }
-
-          let v_avg = ( v[(i-1) + j * Nx] + v[i + j * Nx] +
-                        v[(i-1) + (j+1) * Nx] + v[i + (j+1) * Nx] ) / 4;
           
-          // --- UPDATED: Compute du_dy using selected upwind scheme ---
-          let du_dy;
-          if (currentVelocityScheme === "second") {
-            if(v_avg >= 0) {
-              if(j > 1) {
-                let idx_s2 = i + (j-2)*(Nx+1);
-                du_dy = (3*u[idx] - 4*u[i + (j-1)*(Nx+1)] + u[idx_s2]) / (2*dy);
-              } else {
-                du_dy = (u[idx] - u[i + (j-1)*(Nx+1)]) / dy;
-              }
-            } else {
-              if(j <= Ny-3) {
-                let idx_n2 = i + (j+2)*(Nx+1);
-                du_dy = (-u[idx_n2] + 4*u[i + (j+1)*(Nx+1)] - 3*u[idx]) / (2*dy);
-              } else {
-                du_dy = (u[i + (j+1)*(Nx+1)] - u[idx]) / dy;
-              }
-            }
+          if (currentVelocityScheme === "first") {
+            // --- First-Order Upwinding using face fluxes for u convection ---
+            // X-direction: East and West fluxes (flux = [upwind u value]^2)
+            let idx_e = idx + 1;
+            let u_e_avg = 0.5 * (u[idx] + u[idx_e]);
+            let u_face_e = (u_e_avg >= 0) ? u[idx] : u[idx_e];
+            let F_e = u_face_e * u_face_e;
+            
+            let idx_w = idx - 1;
+            let u_w_avg = 0.5 * (u[idx_w] + u[idx]);
+            let u_face_w = (u_w_avg >= 0) ? u[idx_w] : u[idx];
+            let F_w = u_face_w * u_face_w;
+            
+            // Y-direction: north & south fluxes (flux = v * upwind u)
+            // For north face, u from current cell or that above respectively.
+            let u_north = u[i + (j+1)*(Nx+1)];
+            let v_n = 0.5 * ( v[(i-1) + (j+1)*Nx] + v[i + (j+1)*Nx] );
+            let u_face_n = (v_n >= 0) ? u[idx] : u_north;
+            let F_n = v_n * u_face_n;
+            
+            // For south face, u from cell below or from current cell.
+            let u_south = u[i + (j-1)*(Nx+1)];
+            let v_s = 0.5 * ( v[(i-1) + j*Nx] + v[i + j*Nx] );
+            let u_face_s = (v_s >= 0) ? u_south : u[idx];
+            let F_s = v_s * u_face_s;
+            
+            // Convective term by flux differences.
+            let convective = (F_e - F_w)/dx + (F_n - F_s)/dy;
+            
+            // Diffusion term (using same stencil as before)
+            let idx_n = i + (j+1)*(Nx+1);
+            let idx_s = i + (j-1)*(Nx+1);
+            let lap_u = (u[idx_e] - 2*u[idx] + u[idx_w])/(dx*dx) +
+                        (u[idx_n] - 2*u[idx] + u[idx_s])/(dy*dy);
+            uStar[idx] = u[idx] + dt_sub * ( - convective + nu * lap_u );
+            
           } else {
-            if(v_avg >= 0) {
-              du_dy = (u[idx] - u[i + (j-1)*(Nx+1)]) / dy;
+            // --- Second-Order Upwinding using face fluxes for u convection ---
+            // East face flux
+            let idx_e = idx + 1;
+            let u_face_e = 0;
+            // Decide upwinding using the u value at the left of the face.
+            if(u[idx] >= 0) {
+              // Use second-order reconstruction if available; otherwise, fall back to first-order.
+              u_face_e = (i > 1) ? (1.5 * u[idx] - 0.5 * u[idx - 1]) : u[idx];
             } else {
-              du_dy = (u[i + (j+1)*(Nx+1)] - u[idx]) / dy;
+              // For negative flow, use the right cell.
+              u_face_e = ((idx_e + 1) < u.length && i < Nx - 1) ? (1.5 * u[idx_e] - 0.5 * u[idx_e + 1]) : u[idx_e];
             }
+            let F_e = u_face_e * u_face_e;
+            
+            // West face flux
+            let idx_w = idx - 1;
+            let u_face_w = 0;
+            if(u[idx_w] >= 0) {
+              u_face_w = (i > 2) ? (1.5 * u[idx_w] - 0.5 * u[idx_w - 1]) : u[idx_w];
+            } else {
+              u_face_w = (i < Nx ? (1.5 * u[idx] - 0.5 * u[idx + 1]) : u[idx]);
+            }
+            let F_w = u_face_w * u_face_w;
+            
+            // North face flux (vertical direction)
+            let idx_n = i + (j+1) * (Nx+1);
+            let u_face_n = 0;
+            let v_n = 0.5 * ( v[(i-1) + (j+1)*Nx] + v[i + (j+1)*Nx] );
+            if(v_n >= 0) {
+              u_face_n = (j > 1) ? (1.5 * u[idx] - 0.5 * u[i + (j-1)*(Nx+1)]) : u[idx];
+            } else {
+              u_face_n = ((i + (j+2)*(Nx+1)) < u.length && j < Ny - 1) ? (1.5 * u[idx_n] - 0.5 * u[i + (j+2)*(Nx+1)]) : u[idx_n];
+            }
+            let F_n = v_n * u_face_n;
+            
+            // South face flux
+            let idx_s = i + (j-1) * (Nx+1);
+            let u_face_s = 0;
+            let v_s = 0.5 * ( v[(i-1) + j*Nx] + v[i + j*Nx] );
+            if(v_s >= 0) {
+              u_face_s = (j > 1) ? (1.5 * u[idx_s] - 0.5 * u[i + (j-2)*(Nx+1)]) : u[idx_s];
+            } else {
+              u_face_s = (j < Ny ? (1.5 * u[idx] - 0.5 * u[i + (j+1)*(Nx+1)]) : u[idx]);
+            }
+            let F_s = v_s * u_face_s;
+            
+            let convective = (F_e - F_w)/dx + (F_n - F_s)/dy;
+            let idx_n_local = i + (j+1)*(Nx+1);
+            let idx_s_local = i + (j-1)*(Nx+1);
+            let lap_u = (u[idx_e] - 2*u[idx] + u[idx_w])/(dx*dx) +
+                        (u[idx_n_local] - 2*u[idx] + u[idx_s_local])/(dy*dy);
+            uStar[idx] = u[idx] + dt_sub * ( - convective + nu * lap_u );
           }
-
-          let idx_e_value = u[idx_e]; // used in laplacian (unchanged)
-          let lap_u = (u[idx_e] - 2*u[idx] + u[idx_w])/(dx*dx)
-                      + (u[i + (j+1)*(Nx+1)] - 2*u[idx] + u[i + (j-1)*(Nx+1)])/(dy*dy);
-          uStar[idx] = u[idx] + dt_sub * ( - (u[idx]*du_dx + v_avg*du_dy) + nu * lap_u );
         }
       }
       
@@ -418,66 +444,87 @@
             vStar[idx] = 0;
             continue;
           }
-          let idx_n = i + (j+1) * Nx;
-          let idx_s = i + (j-1) * Nx;
-
-          // --- UPDATED: Compute dv_dy using selected upwind scheme ---
-          let dv_dy;
-          if (currentVelocityScheme === "second") {
-            if(v[idx] >= 0) {
-              if(j > 1) {
-                let idx_s2 = i + (j-2)*Nx;
-                dv_dy = (3*v[idx] - 4*v[i + (j-1)*Nx] + v[idx_s2]) / (2*dy);
-              } else {
-                dv_dy = (v[idx] - v[i + (j-1)*Nx]) / dy;
-              }
-            } else {
-              if(j <= Ny-2) {
-                let idx_n2 = i + (j+2)*Nx;
-                dv_dy = (-v[idx_n2] + 4*v[i + (j+1)*Nx] - 3*v[idx]) / (2*dy);
-              } else {
-                dv_dy = (v[i + (j+1)*Nx] - v[idx]) / dy;
-              }
-            }
-          } else {
-            if(v[idx] >= 0) {
-              dv_dy = (v[idx] - v[i + (j-1)*Nx]) / dy;
-            } else {
-              dv_dy = (v[i + (j+1)*Nx] - v[idx]) / dy;
-            }
-          }
-
-          let u_avg = ( u[(i+1) + j*(Nx+1)] + u[i + j*(Nx+1)] ) / 2;
           
-          // --- UPDATED: Compute dv_dx using selected upwind scheme ---
-          let dv_dx;
-          if (currentVelocityScheme === "second") {
-            if(u_avg >= 0) {
-              if(i > 1) {
-                let idx_w2 = (i-2) + j*Nx;
-                dv_dx = (3*v[idx] - 4*v[(i-1) + j*Nx] + v[idx_w2])/(2*dx);
-              } else {
-                dv_dx = (v[idx] - v[(i-1) + j*Nx]) / dx;
-              }
-            } else {
-              if(i <= Nx-3) {
-                let idx_e2 = (i+2) + j*Nx;
-                dv_dx = (-v[idx_e2] + 4*v[(i+1) + j*Nx] - 3*v[idx])/(2*dx);
-              } else {
-                dv_dx = (v[(i+1) + j*Nx] - v[idx]) / dx;
-              }
-            }
+          if (currentVelocityScheme === "first") {
+            // --- First-Order Upwinding using face fluxes for v convection ---
+            // X-direction: Flux F = u * v at the vertical faces.
+            let idx_e = idx + 1;
+            let u_e = u[(i+1) + j*(Nx+1)];
+            let v_face_e = (u_e >= 0) ? v[idx] : v[idx_e];
+            let F_e = u_e * v_face_e;
+            
+            let idx_w = idx - 1;
+            let u_w = u[i + j*(Nx+1)];
+            let v_face_w = (u_w >= 0) ? v[idx_w] : v[idx];
+            let F_w = u_w * v_face_w;
+            
+            // Y-direction: Flux F = (v)^2 at the horizontal faces.
+            let idx_n = i + (j+1)*Nx;
+            let v_n_avg = 0.5 * (v[idx] + v[idx_n]);
+            let v_face_n = (v_n_avg >= 0) ? v[idx] : v[idx_n];
+            let F_n = v_face_n * v_face_n;
+            
+            let idx_s = i + (j-1)*Nx;
+            let v_s_avg = 0.5 * (v[idx_s] + v[idx]);
+            let v_face_s = (v_s_avg >= 0) ? v[idx_s] : v[idx];
+            let F_s = v_face_s * v_face_s;
+            
+            let convective = (F_e - F_w)/dx + (F_n - F_s)/dy;
+            let lap_v = (v[(i+1) + j * Nx] - 2*v[idx] + v[(i-1) + j * Nx])/(dx*dx) +
+                        (v[idx_n] - 2*v[idx] + v[idx_s])/(dy*dy);
+            vStar[idx] = v[idx] + dt_sub * ( - convective + nu * lap_v );
+            
           } else {
-            if(u_avg >= 0) {
-              dv_dx = (v[idx] - v[(i-1) + j*Nx]) / dx;
+            // --- Second-Order Upwinding using face fluxes for v convection ---
+            // East face flux for v
+            let idx_e = idx + 1;
+            let v_face_e = 0;
+            let u_e = u[(i+1) + j*(Nx+1)];
+            if(u_e >= 0) {
+              v_face_e = (i > 0) ? (1.5*v[idx] - 0.5*v[idx - 1]) : v[idx];
             } else {
-              dv_dx = (v[(i+1) + j*Nx] - v[idx]) / dx;
+              v_face_e = ((idx_e + 1) < v.length && i < Nx - 2) ? (1.5 * v[idx + 1] - 0.5 * v[idx + 2]) : v[idx + 1];
             }
+            let F_e = u_e * v_face_e;
+            
+            // West face flux for v
+            let idx_w = idx - 1;
+            let v_face_w = 0;
+            let u_w = u[i + j*(Nx+1)];
+            if(u_w >= 0) {
+              v_face_w = (i > 1) ? (1.5*v[idx_w] - 0.5*v[idx_w - 1]) : v[idx_w];
+            } else {
+              v_face_w = (i < Nx - 1 ? (1.5*v[idx] - 0.5*v[idx + 1]) : v[idx]) ;
+            }
+            let F_w = u_w * v_face_w;
+            
+            // North face flux for v
+            let idx_n = i + (j+1)*Nx;
+            let v_face_n = 0;
+            let v_n_avg = 0.5 * (v[idx] + v[idx_n]);
+            if(v_n_avg >= 0) {
+              v_face_n = (j > 1) ? (1.5*v[idx] - 0.5*v[i + (j-1)*Nx]) : v[idx];
+            } else {
+              v_face_n = ((i + (j+2)*Nx) < v.length && j < Ny - 1) ? (1.5*v[idx_n] - 0.5*v[i + (j+2)*Nx]) : v[idx_n];
+            }
+            let F_n = v_face_n * v_face_n;
+            
+            // South face flux for v
+            let idx_s = i + (j-1)*Nx;
+            let v_face_s = 0;
+            let v_s_avg = 0.5 * (v[idx_s] + v[idx]);
+            if(v_s_avg >= 0) {
+              v_face_s = (j > 1) ? (1.5*v[idx_s] - 0.5*v[i + (j-2)*Nx]) : v[idx_s];
+            } else {
+              v_face_s = (j < Ny ? (1.5*v[idx] - 0.5*v[i + (j+1)*Nx]) : v[idx]);
+            }
+            let F_s = v_face_s * v_face_s;
+            
+            let convective = (F_e - F_w)/dx + (F_n - F_s)/dy;
+            let lap_v = (v[(i+1) + j * Nx] - 2*v[idx] + v[(i-1) + j * Nx])/(dx*dx) +
+                        (v[i + (j+1)*Nx] - 2*v[idx] + v[i + (j-1)*Nx])/(dy*dy);
+            vStar[idx] = v[idx] + dt_sub * ( - convective + nu * lap_v );
           }
-          
-          let lap_v = (v[(i+1) + j * Nx] - 2*v[idx] + v[(i-1) + j * Nx])/(dx*dx)
-                      + (v[idx_n] - 2*v[idx] + v[idx_s])/(dy*dy);
-          vStar[idx] = v[idx] + dt_sub * ( - (u_avg * dv_dx + v[idx]*dv_dy) + nu * lap_v );
         }
       }
       
