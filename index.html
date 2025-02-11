@@ -63,6 +63,14 @@
       <label for="viscosityInput">Viscosity (m²/s):</label>
       <input type="number" id="viscosityInput" min="0.001" max="0.1" step="0.001" value="0.01">
 
+      <!-- NEW: Pressure Solver Selection -->
+      <h2>Pressure Solver</h2>
+      <label for="pressureSolverSelect">Choose Pressure Solver:</label>
+      <select id="pressureSolverSelect">
+        <option value="jacobi" selected>Jacobi Iteration</option>
+        <option value="sor">Successive Over-Relaxation (SOR)</option>
+      </select>
+
       <h2>Simulation Control</h2>
       <button id="startButton">Start</button>
       <button id="pauseButton">Pause</button>
@@ -117,6 +125,9 @@
     const resetButton = document.getElementById("resetButton");
     // NEW viscosity UI elements
     const viscosityInput = document.getElementById("viscosityInput");
+    // NEW: Pressure solver UI element and selection state
+    const pressureSolverSelect = document.getElementById("pressureSolverSelect");
+    let currentPressureSolver = pressureSolverSelect.value;
 
     // Simulation state variables
     let simulationRunning = false;
@@ -359,57 +370,84 @@
         }
       }
       
-      // Solve for pressure correction pPrime using Jacobi iteration on pressure cells
-      // NEW: Store the final pressure residual to later log and use in tolerance comparisons.
-      pPrime.fill(0);
-      const omega = 0.7;  // relaxation factor
-      const pressureTolerance = 1e-6; // tolerance for early exit
-      let finalPResidual = Infinity;  // NEW: initialize variable to track pressure residual
-      for (let iter = 0; iter < iterations; iter++){
-          // Reset the global buffer for updated pressure corrections
-          pPrime_new.fill(0);
-          for (let j = 1; j < Ny-1; j++){
-            for (let i = 1; i < Nx-1; i++){
-              let idx = i + j * Nx;
-              let p_update = ((pPrime[(i+1)+j*Nx] + pPrime[(i-1)+j*Nx])/(dx*dx) +
-                             (pPrime[i+(j+1)*Nx] + pPrime[i+(j-1)*Nx])/(dy*dy) -
-                              rhs[idx]) / denom;
-              // Under-relax the pressure correction
-              pPrime_new[idx] = omega * p_update + (1 - omega) * pPrime[idx];
-            }
+      if (currentPressureSolver === "sor") {
+          // ---------- Pressure Correction using Successive Over-Relaxation (SOR) ----------
+          pPrime.fill(0); // initialize pressure correction field
+          const sorOmega = 1.7; // SOR relaxation factor (tunable)
+          const pressureTolerance = 1e-4;
+          let finalPResidual = Infinity;
+          for (let iter = 0; iter < iterations; iter++){
+              let maxError = 0;
+              for (let j = 1; j < Ny-1; j++){
+                  for (let i = 1; i < Nx-1; i++){
+                      let idx = i + j * Nx;
+                      let p_old = pPrime[idx];
+                      let p_update = ((pPrime[(i+1)+j*Nx] + pPrime[(i-1)+j*Nx])/(dx*dx) +
+                                      (pPrime[i+(j+1)*Nx] + pPrime[i+(j-1)*Nx])/(dy*dy) -
+                                       rhs[idx]) / denom;
+                      pPrime[idx] = (1 - sorOmega) * p_old + sorOmega * p_update;
+                      let error = Math.abs(pPrime[idx] - p_old);
+                      if (error > maxError) maxError = error;
+                  }
+              }
+              // Enforce Neumann BC on the bottom and top boundaries
+              for (let i = 0; i < Nx; i++){
+                  pPrime[i] = pPrime[i+Nx]; // bottom
+                  pPrime[i + (Ny-1)*Nx] = pPrime[i + (Ny-2)*Nx]; // top
+              }
+              // Update left (inlet) and outlet (right) boundaries
+              for (let j = 0; j < Ny; j++){
+                  pPrime[0+j*Nx] = pPrime[1+j*Nx];
+                  pPrime[Nx-1+j*Nx] = 0;
+              }
+              finalPResidual = maxError;
+              if (maxError < pressureTolerance) break;
           }
-          // Compute maximum difference for early exit
-          let maxError = 0;
-          for (let j = 1; j < Ny-1; j++){
-            for (let i = 1; i < Nx-1; i++){
-              let idx = i + j * Nx;
-              let error = Math.abs(pPrime_new[idx] - pPrime[idx]);
-              if(error > maxError) maxError = error;
-            }
+          lastPResidual = finalPResidual;
+      } else {
+          // ---------- Pressure Correction using Jacobi Iteration ----------
+          pPrime.fill(0);
+          const jacobiOmega = 0.7;
+          const pressureTolerance = 1e-6;
+          let finalPResidual = Infinity;
+          for (let iter = 0; iter < iterations; iter++){
+              pPrime_new.fill(0);
+              for (let j = 1; j < Ny-1; j++){
+                  for (let i = 1; i < Nx-1; i++){
+                      let idx = i + j * Nx;
+                      let p_update = ((pPrime[(i+1)+j*Nx] + pPrime[(i-1)+j*Nx])/(dx*dx) +
+                                      (pPrime[i+(j+1)*Nx] + pPrime[i+(j-1)*Nx])/(dy*dy) -
+                                      rhs[idx]) / denom;
+                      pPrime_new[idx] = jacobiOmega * p_update + (1 - jacobiOmega) * pPrime[idx];
+                  }
+              }
+              let maxError = 0;
+              for (let j = 1; j < Ny-1; j++){
+                  for (let i = 1; i < Nx-1; i++){
+                      let idx = i + j * Nx;
+                      let error = Math.abs(pPrime_new[idx] - pPrime[idx]);
+                      if (error > maxError) maxError = error;
+                  }
+              }
+              finalPResidual = maxError;
+              for (let j = 1; j < Ny-1; j++){
+                  for (let i = 1; i < Nx-1; i++){
+                      let idx = i + j * Nx;
+                      pPrime[idx] = pPrime_new[idx];
+                  }
+              }
+              for (let i = 0; i < Nx; i++){
+                  pPrime[i] = pPrime[i+Nx]; // bottom
+                  pPrime[i + (Ny-1)*Nx] = pPrime[i + (Ny-2)*Nx]; // top
+              }
+              for (let j = 0; j < Ny; j++){
+                  pPrime[0+j*Nx] = pPrime[1+j*Nx]; // left (inlet)
+                  pPrime[Nx-1+j*Nx] = 0; // outlet: enforce fixed pressure (Dirichlet)
+              }
+              if (maxError < pressureTolerance) break;
           }
-          finalPResidual = maxError; // NEW: update final pressure residual
-          
-          // Update interior cells from pPrime_new to pPrime
-          for (let j = 1; j < Ny-1; j++){
-            for (let i = 1; i < Nx-1; i++){
-              let idx = i + j * Nx;
-              pPrime[idx] = pPrime_new[idx];
-            }
-          }
-          // Neumann BC for bottom and top boundaries
-          for (let i = 0; i < Nx; i++){
-            pPrime[i] = pPrime[i+Nx]; // bottom
-            pPrime[i + (Ny-1)*Nx] = pPrime[i + (Ny-2)*Nx]; // top
-          }
-          // Update left and outlet (right) boundaries
-          for (let j = 0; j < Ny; j++){
-            pPrime[0+j*Nx] = pPrime[1+j*Nx]; // left (inlet)
-            pPrime[Nx-1+j*Nx] = 0; // outlet: enforce fixed pressure (Dirichlet condition)
-          }
-          if(maxError < pressureTolerance) break;
+          lastPResidual = finalPResidual;
       }
-      // NEW: Save the final pressure residual for logging and tolerance computations.
-      lastPResidual = finalPResidual;
       
       // ----------------- Corrector Step -----------------
       for (let j = 0; j < Ny; j++){
@@ -716,6 +754,9 @@
     });
     viscosityInput.addEventListener("input", function() {
       nu = parseFloat(viscosityInput.value);
+    });
+    pressureSolverSelect.addEventListener("change", function() {
+      currentPressureSolver = pressureSolverSelect.value;
     });
 
     // Initialize simulation when page loads
