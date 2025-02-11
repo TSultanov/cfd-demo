@@ -239,8 +239,12 @@
       // Use precomputed obstacle mask:
       obstacle = obstacleMask;
       
-      residualHistory = [];
+      // Reset residual histories:
+      residualHistoryU = [];
+      residualHistoryV = [];
+      residualHistoryP = [];
       residualText.value = "";
+      
       // NEW: Initialize tracer particles only if tracers are enabled
       if (tracersEnabled) {
         initTracers();
@@ -321,10 +325,10 @@
       residualText.value += logEntry;
       residualText.scrollTop = residualText.scrollHeight;
       
-      // Push the residuals to the history for graphing
-      residualHistory.push({step: simulationStepCount, residual: maxResidualU});
-      residualHistory.push({step: simulationStepCount, residual: maxResidualV});
-      residualHistory.push({step: simulationStepCount, residual: maxPressureResidual});
+      // Push the residuals to separate histories for graphing
+      residualHistoryU.push({ step: simulationStepCount, residual: maxResidualU });
+      residualHistoryV.push({ step: simulationStepCount, residual: maxResidualV });
+      residualHistoryP.push({ step: simulationStepCount, residual: maxPressureResidual });
 
       // Adjust the global time step (dt) for the next simulation step based on the CFL condition and pressure residual.
       const previousDt = dt;
@@ -1114,31 +1118,81 @@
       residualCtx.lineTo(residualCanvas.width - 10, residualCanvas.height - 30);
       residualCtx.stroke();
       // Y-axis ticks (10 ticks)
-      for(let i = 0; i <= 10; i++) {
+      for (let i = 0; i <= 10; i++) {
         let y = 10 + i * ((residualCanvas.height - 40) / 10);
         residualCtx.beginPath();
         residualCtx.moveTo(35, y);
         residualCtx.lineTo(40, y);
         residualCtx.stroke();
-        residualCtx.fillText(((10 - i) / 10).toFixed(1), 5, y+3);
+        residualCtx.fillText(((10 - i) / 10).toFixed(1), 5, y + 3);
       }
+
+      // Determine the maximum time step from the histories.
+      let maxStep = Math.max(
+        (residualHistoryU.length > 0 ? residualHistoryU[residualHistoryU.length - 1].step : 0),
+        (residualHistoryV.length > 0 ? residualHistoryV[residualHistoryV.length - 1].step : 0),
+        (residualHistoryP.length > 0 ? residualHistoryP[residualHistoryP.length - 1].step : 0)
+      );
+
+      // Determine the maximum residual value across all histories,
+      // ensuring a minimum value (0.01) for proper vertical scaling.
+      let maxResidualValue = Math.max(
+        ...residualHistoryU.map(r => r.residual),
+        ...residualHistoryV.map(r => r.residual),
+        ...residualHistoryP.map(r => r.residual),
+        0.01
+      );
+
+      // Set a thicker line width for better visibility of residual lines.
+      residualCtx.lineWidth = 2;
       
-      // Plot residual history as a red line
-      if(residualHistory.length < 2) return;
-      residualCtx.strokeStyle = "red";
-      residualCtx.beginPath();
-      let maxStep = residualHistory[residualHistory.length - 1].step;
-      let maxResidualValue = Math.max(...residualHistory.map(r => r.residual)) || 1;
-      for(let i = 0; i < residualHistory.length; i++) {
-        let x = 40 + (residualHistory[i].step / maxStep) * (residualCanvas.width - 50);
-        let y = 10 + (1 - (residualHistory[i].residual / maxResidualValue)) * (residualCanvas.height - 40);
-        if(i === 0) {
-          residualCtx.moveTo(x,y);
-        } else {
-          residualCtx.lineTo(x,y);
+      // Plot U residual history in red
+      if (residualHistoryU.length > 1) {
+        residualCtx.strokeStyle = "red";
+        residualCtx.beginPath();
+        for (let i = 0; i < residualHistoryU.length; i++) {
+          let x = 40 + (residualHistoryU[i].step / maxStep) * (residualCanvas.width - 50);
+          let y = 10 + (1 - (residualHistoryU[i].residual / maxResidualValue)) * (residualCanvas.height - 40);
+          if (i === 0) {
+            residualCtx.moveTo(x, y);
+          } else {
+            residualCtx.lineTo(x, y);
+          }
         }
+        residualCtx.stroke();
       }
-      residualCtx.stroke();
+
+      // Plot V residual history in green
+      if (residualHistoryV.length > 1) {
+        residualCtx.strokeStyle = "green";
+        residualCtx.beginPath();
+        for (let i = 0; i < residualHistoryV.length; i++) {
+          let x = 40 + (residualHistoryV[i].step / maxStep) * (residualCanvas.width - 50);
+          let y = 10 + (1 - (residualHistoryV[i].residual / maxResidualValue)) * (residualCanvas.height - 40);
+          if (i === 0) {
+            residualCtx.moveTo(x, y);
+          } else {
+            residualCtx.lineTo(x, y);
+          }
+        }
+        residualCtx.stroke();
+      }
+
+      // Plot P residual history in blue
+      if (residualHistoryP.length > 1) {
+        residualCtx.strokeStyle = "blue";
+        residualCtx.beginPath();
+        for (let i = 0; i < residualHistoryP.length; i++) {
+          let x = 40 + (residualHistoryP[i].step / maxStep) * (residualCanvas.width - 50);
+          let y = 10 + (1 - (residualHistoryP[i].residual / maxResidualValue)) * (residualCanvas.height - 40);
+          if (i === 0) {
+            residualCtx.moveTo(x, y);
+          } else {
+            residualCtx.lineTo(x, y);
+          }
+        }
+        residualCtx.stroke();
+      }
     }
 
     // Draw the legend for field values in the legend canvas
