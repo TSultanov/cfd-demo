@@ -63,6 +63,7 @@
       <select id="velocitySchemeSelect">
         <option value="first" selected>First-Order Upwind</option>
         <option value="second">Second-Order Upwind</option>
+        <option value="quick">QUICK Scheme</option>
       </select>
       <h2>Time Step Control</h2>
       <label for="timeStepInput">Time Step (s):</label>
@@ -389,7 +390,7 @@
                         (u[idx_n] - 2*u[idx] + u[idx_s])/(dy*dy);
             uStar[idx] = u[idx] + dt_sub * ( - convective + nu * lap_u );
             
-          } else {
+          } else if (currentVelocityScheme === "second") {
             // --- Second-Order Upwinding using face fluxes for u convection ---
             // East face flux
             let idx_e = idx + 1;
@@ -442,6 +443,84 @@
             let lap_u = (u[idx_e] - 2*u[idx] + u[idx_w])/(dx*dx) +
                         (u[idx_n_local] - 2*u[idx] + u[idx_s_local])/(dy*dy);
             uStar[idx] = u[idx] + dt_sub * ( - convective + nu * lap_u );
+          } else if (currentVelocityScheme === "quick") {
+            // ---- QUICK discretization for u convection ----
+            // East face flux
+            let u_face_e;
+            if (u[idx] >= 0) {
+              if(i >= 2) {
+                u_face_e = (-u[idx-1] + 6*u[idx] + 3*u[idx+1]) / 8;
+              } else {
+                u_face_e = (1.5*u[idx] - 0.5*u[idx-1]);
+              }
+            } else {
+              if(i <= Nx - 2) {
+                u_face_e = (3*u[idx] + 6*u[idx+1] - u[idx+2]) / 8;
+              } else {
+                u_face_e = u[idx+1];
+              }
+            }
+            let F_e = u_face_e * u_face_e;
+            
+            // West face flux
+            let u_face_w;
+            if (u[idx-1] >= 0) {
+              if(i >= 3) {
+                u_face_w = (-u[idx-2] + 6*u[idx-1] + 3*u[idx]) / 8;
+              } else {
+                u_face_w = (1.5*u[idx-1] - 0.5*u[idx]);
+              }
+            } else {
+              u_face_w = (3*u[idx-1] + 6*u[idx] - u[idx+1]) / 8;
+            }
+            let F_w = u_face_w * u_face_w;
+            
+            // North face flux
+            let idx_n = i + (j+1)*(Nx+1);
+            let u_north = u[idx_n];
+            let v_n = 0.5 * (v[(i-1) + (j+1)*Nx] + v[i + (j+1)*Nx]);
+            let u_face_n;
+            if(v_n >= 0) {
+              if(j >= 2) {
+                u_face_n = (-u[i + (j-1)*(Nx+1)] + 6*u[idx] + 3*u_north) / 8;
+              } else {
+                u_face_n = (1.5*u[idx] - 0.5*u[i + (j-1)*(Nx+1)]);
+              }
+            } else {
+              if(j < Ny - 2) {
+                u_face_n = (3*u[idx] + 6*u_north - u[i + (j+2)*(Nx+1)]) / 8;
+              } else {
+                u_face_n = u_north;
+              }
+            }
+            let F_n = v_n * u_face_n;
+            
+            // South face flux
+            let idx_s = i + (j-1)*(Nx+1);
+            let u_south = u[idx_s];
+            let v_s = 0.5 * (v[(i-1) + j*Nx] + v[i + j*Nx]);
+            let u_face_s;
+            if(v_s >= 0) {
+              if(j >= 2) {
+                u_face_s = (-u[i + (j-2)*(Nx+1)] + 6*u[idx_s] + 3*u[idx]) / 8;
+              } else {
+                u_face_s = (1.5*u[idx_s] - 0.5*u[idx]);
+              }
+            } else {
+              if(j < Ny - 1) {
+                u_face_s = (3*u[idx_s] + 6*u[idx] - u[i + (j+1)*(Nx+1)]) / 8;
+              } else {
+                u_face_s = u[idx];
+              }
+            }
+            let F_s = v_s * u_face_s;
+            
+            let convective = (F_e - F_w)/dx + (F_n - F_s)/dy;
+            let idx_n_local = i + (j+1)*(Nx+1);
+            let idx_s_local = i + (j-1)*(Nx+1);
+            let lap_u = (u[idx+1] - 2*u[idx] + u[idx-1])/(dx*dx) +
+                        (u[idx_n_local] - 2*u[idx] + u[idx_s_local])/(dy*dy);
+            uStar[idx] = u[idx] + dt_sub * ( - convective + nu * lap_u );
           }
         }
       }
@@ -486,7 +565,7 @@
                         (v[idx_n] - 2*v[idx] + v[idx_s])/(dy*dy);
             vStar[idx] = v[idx] + dt_sub * ( - convective + nu * lap_v );
             
-          } else {
+          } else if (currentVelocityScheme === "second") {
             // --- Second-Order Upwinding using face fluxes for v convection ---
             // East face flux for v
             let idx_e = idx + 1;
@@ -534,7 +613,87 @@
             
             let convective = (F_e - F_w)/dx + (F_n - F_s)/dy;
             let lap_v = (v[(i+1) + j * Nx] - 2*v[idx] + v[(i-1) + j * Nx])/(dx*dx) +
-                        (v[i + (j+1)*Nx] - 2*v[idx] + v[i + (j-1)*Nx])/(dy*dy);
+                        (v[idx+2] - 2*v[idx] + v[idx])/(dy*dy);
+            vStar[idx] = v[idx] + dt_sub * ( - convective + nu * lap_v );
+          } else if (currentVelocityScheme === "quick") {
+            // ---- QUICK discretization for v convection ----
+            // East face flux for v
+            let idx_e = idx + 1;
+            let u_e = u[(i+1) + j*(Nx+1)];
+            let v_face_e;
+            if(u_e >= 0) {
+              if(i >= 2) {
+                v_face_e = (-v[idx-1] + 6*v[idx] + 3*v[idx_e]) / 8;
+              } else {
+                v_face_e = (1.5*v[idx] - 0.5*v[idx-1]);
+              }
+            } else {
+              if(i < Nx - 2) {
+                v_face_e = (3*v[idx] + 6*v[idx_e] - v[idx_e+1]) / 8;
+              } else {
+                v_face_e = v[idx_e];
+              }
+            }
+            let F_e = u_e * v_face_e;
+            
+            // West face flux for v
+            let idx_w = idx - 1;
+            let u_w = u[i + j*(Nx+1)];
+            let v_face_w;
+            if(u_w >= 0) {
+              if(i >= 3) {
+                v_face_w = (-v[idx-2] + 6*v[idx_w] + 3*v[idx]) / 8;
+              } else {
+                v_face_w = (1.5*v[idx_w] - 0.5*v[idx]);
+              }
+            } else {
+              v_face_w = (3*v[idx_w] + 6*v[idx] - v[idx_e]) / 8;
+            }
+            let F_w = u_w * v_face_w;
+            
+            // North face flux for v
+            let idx_n = i + (j+1)*Nx;
+            let v_n_avg = 0.5 * (v[idx] + v[idx_n]);
+            let v_face_n;
+            if(v_n_avg >= 0) {
+              if(j >= 2) {
+                v_face_n = (-v[i + (j-1)*Nx] + 6*v[idx] + 3*v[idx_n]) / 8;
+              } else {
+                v_face_n = (1.5*v[idx] - 0.5*v[i + (j-1)*Nx]);
+              }
+            } else {
+              if(j < Ny - 1) {
+                v_face_n = (3*v[idx] + 6*v[idx_n] - v[i + (j+2)*Nx]) / 8;
+              } else {
+                v_face_n = v[idx_n];
+              }
+            }
+            let F_n = v_face_n * v_face_n;
+            
+            // South face flux for v
+            let idx_s = i + (j-1)*Nx;
+            let v_s_avg = 0.5 * (v[idx_s] + v[idx]);
+            let v_face_s;
+            if(v_s_avg >= 0) {
+              if(j >= 2) {
+                v_face_s = (-v[i + (j-2)*Nx] + 6*v[idx_s] + 3*v[idx]) / 8;
+              } else {
+                v_face_s = (1.5*v[idx_s] - 0.5*v[idx]);
+              }
+            } else {
+              if(j < Ny - 1) {
+                v_face_s = (3*v[idx_s] + 6*v[idx] - v[i + (j+1)*Nx]) / 8;
+              } else {
+                v_face_s = v[idx];
+              }
+            }
+            let F_s = v_face_s * v_face_s;
+            
+            let convective = (F_e - F_w)/dx + (F_n - F_s)/dy;
+            let idx_n_local = i + (j+1)*Nx;
+            let idx_s_local = i + (j-1)*Nx;
+            let lap_v = (v[(i+1) + j * Nx] - 2*v[idx] + v[(i-1) + j * Nx])/(dx*dx) +
+                        (v[idx+2] - 2*v[idx] + v[idx])/(dy*dy);
             vStar[idx] = v[idx] + dt_sub * ( - convective + nu * lap_v );
           }
         }
