@@ -35,6 +35,7 @@
       <button id="velocityButton">Velocity Field</button>
       <button id="pressureButton">Pressure Field</button>
       <button id="vorticityButton">Vorticity Field</button>
+      <button id="tracerButton">Tracer Particles</button>
       <h3>Legend</h3>
       <!-- Gradient legend with 10 ticks -->
       <canvas id="legendCanvas" width="200" height="30"></canvas>
@@ -128,6 +129,7 @@
     const velocityButton = document.getElementById("velocityButton");
     const pressureButton = document.getElementById("pressureButton");
     const vorticityButton = document.getElementById("vorticityButton");
+    const tracerButton = document.getElementById("tracerButton");
     const inletVelocitySlider = document.getElementById("inletVelocitySlider");
     const inletVelocityValue = document.getElementById("inletVelocityValue");
     const inletProfileSelect = document.getElementById("inletProfileSelect");
@@ -211,23 +213,22 @@
       p = new Float32Array(Nx * Ny);          // p: Nx x Ny
       
       // --- Pre-allocate temporary buffers ---
-      // For residual computation:
       uOld = new Float32Array(u.length);
       vOld = new Float32Array(v.length);
-      // For predictor step:
       uStar  = new Float32Array(u.length);
       vStar  = new Float32Array(v.length);
-      // For pressure correction:
       rhs       = new Float32Array(Nx * Ny);
       pPrime    = new Float32Array(Nx * Ny);
       pPrime_new = new Float32Array(Nx * Ny);
       
-      // ----- Use precomputed obstacle mask for pressure grid -----
+      // USE precomputed obstacle mask:
       obstacle = obstacleMask;
       
-      // Clear residual history and text log
       residualHistory = [];
       residualText.value = "";
+      // NEW: Initialize tracer particles
+      initTracers();
+      
       drawSimulation();
       drawLegend();
       drawResidualGraph();
@@ -751,7 +752,49 @@
 
     /******************** Visualization ********************/
     function drawSimulation() {
+      // Always clear the canvas to remove previous drawings
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (currentVisualization === "tracer") {
+         // Compute grid mapping as before
+         const cellSize = canvas.width / Nx;
+         const domainWidth = Nx * cellSize; // equals canvas.width
+         const domainHeight = Ny * cellSize;
+         const offsetX = (canvas.width - domainWidth) / 2;
+         const offsetY = (canvas.height - domainHeight) / 2;
+
+         // Draw tracer particles as red dots (no trails)
+         for (let tracer of tracers) {
+           ctx.beginPath();
+           ctx.arc(
+             crisp(offsetX + (tracer.x / Lx) * domainWidth),
+             crisp(offsetY + (1 - tracer.y / Ly) * domainHeight),
+             3, 0, 2 * Math.PI
+           );
+           ctx.fillStyle = "red";
+           ctx.fill();
+         }
+         // Draw simulation domain boundaries using colored lines
+         drawDomainBoundaries(cellSize, offsetX, offsetY);
+
+         // Draw cylindrical obstacle on tracer visualization
+         let iCylinder = cylinderCenterX / dx;
+         let jCylinder = cylinderCenterY / dy;
+         let cx = offsetX + (iCylinder - 0.5) * cellSize;
+         let cy = offsetY + (Ny - jCylinder - 0.5) * cellSize;
+         let cr = (cylinderRadius / dx) * cellSize;
+         ctx.beginPath();
+         ctx.arc(cx, cy, cr, 0, 2 * Math.PI);
+         ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+         ctx.fill();
+         ctx.strokeStyle = "white";
+         ctx.lineWidth = 2;
+         ctx.stroke();
+
+         return; // Skip the normal field visualization when in tracer mode
+      }
+      
+      // Regular visualization branch: (e.g., velocity, pressure, vorticity)
       // Use pressure grid dimensions for visualization
       const cellSize = canvas.width / Nx;
       const domainWidth = Nx * cellSize;
@@ -934,6 +977,7 @@
     function simulationLoop() {
       if(!simulationRunning) return;
       updateSimulation();
+      updateTracers(dt);
       drawSimulation();
       drawResidualGraph();
       drawLegend();
@@ -953,6 +997,11 @@
     });
     vorticityButton.addEventListener("click", function() {
       currentVisualization = "vorticity";
+      drawSimulation();
+      drawLegend();
+    });
+    tracerButton.addEventListener("click", function() {
+      currentVisualization = "tracer";
       drawSimulation();
       drawLegend();
     });
@@ -1149,6 +1198,93 @@
       
       // Post-smoothing: increase iterations to 5.
       mgSmooth(p, rhs, nx, ny, dx, dy, 5);
+    }
+
+    // **************** NEW: Tracer Particles Functions ****************
+    let tracers = [];
+
+    function initTracers() {
+      tracers = [];
+      // Inject one tracer per inlet cell face (one per row in the u face, total of Ny)
+      for (let j = 0; j < Ny; j++) {
+        let x = 0;
+        let y = (j + 0.5) * dy; // place tracer at the center of the inlet cell face
+        tracers.push({ x: x, y: y, initialY: y });
+      }
+    }
+
+    function updateTracers(dt) {
+      let updatedTracers = [];
+      for (let tracer of tracers) {
+        let vel = getVelocityAt(tracer.x, tracer.y);
+        tracer.x += dt * vel.u;
+        tracer.y += dt * vel.v;
+        // Only keep tracer if it is within bounds
+        if (tracer.x >= 0 && tracer.x <= Lx && tracer.y >= 0 && tracer.y <= Ly) {
+          updatedTracers.push(tracer);
+        }
+      }
+      tracers = updatedTracers;
+    }
+
+    function getVelocityAt(x, y) {
+      // Bilinearly interpolate the cell-centered velocity.
+      // Determine indices in the pressure (cell-centered) grid:
+      let i = Math.floor(x / dx);
+      let j = Math.floor(y / dy);
+      if (i < 0) i = 0;
+      if (i > Nx - 2) i = Nx - 2;
+      if (j < 0) j = 0;
+      if (j > Ny - 2) j = Ny - 2;
+      let rx = (x - i * dx) / dx;
+      let ry = (y - j * dy) / dy;
+      
+      // Helper: Compute cell-centered velocity for pressure cell (i,j)
+      function cellCenterVelocity(ii, jj) {
+        let u_val = 0.5 * (u[ii + jj * (Nx+1)] + u[(ii+1) + jj * (Nx+1)]);
+        let v_val = 0.5 * (v[ii + jj * Nx] + v[ii + (jj+1) * Nx]);
+        return { u: u_val, v: v_val };
+      }
+      let v00 = cellCenterVelocity(i, j);
+      let v10 = cellCenterVelocity(i+1, j);
+      let v01 = cellCenterVelocity(i, j+1);
+      let v11 = cellCenterVelocity(i+1, j+1);
+      
+      let u_interp = (1 - rx) * ((1 - ry) * v00.u + ry * v01.u) + rx * ((1 - ry) * v10.u + ry * v11.u);
+      let v_interp = (1 - rx) * ((1 - ry) * v00.v + ry * v01.v) + rx * ((1 - ry) * v10.v + ry * v11.v);
+      return { u: u_interp, v: v_interp };
+    }
+
+    // Helper function to snap a coordinate to the nearest pixel for crisp drawing
+    function crisp(val) {
+      const dpr = window.devicePixelRatio || 1;
+      return Math.round(val * dpr) / dpr + 0.5;
+    }
+
+    // New constant: inject new tracers every N simulation steps
+    const tracerInjectionInterval = 100; // adjust as desired
+
+    // New function: inject one tracer per inlet cell face (one per row)
+    function injectTracers() {
+      for (let j = 0; j < Ny; j++) {
+        let x = 0;
+        let y = (j + 0.5) * dy; // place tracer at the center of the inlet cell face
+        tracers.push({ x: x, y: y, initialY: y });
+      }
+    }
+
+    // Update the simulation loop to inject new tracers at regular intervals
+    function simulationLoop() {
+      if(!simulationRunning) return;
+      updateSimulation();
+      updateTracers(dt);
+      if (simulationStepCount % tracerInjectionInterval === 0) {
+         injectTracers();
+      }
+      drawSimulation();
+      drawResidualGraph();
+      drawLegend();
+      requestAnimationFrame(simulationLoop);
     }
   </script>
 </body>
