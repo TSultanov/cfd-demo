@@ -55,8 +55,11 @@
       </select>
       <h2>Time Step Control</h2>
       <label for="timeStepInput">Time Step (s):</label>
-      <input type="number" id="timeStepInput" step="0.001" value="0.01">
+      <input type="number" id="timeStepInput" step="0.001" value="0.5">
       <p>Current dt: <span id="currentDtValue">0.5</span></p>
+      <!-- NEW: Checkbox to enable/disable dt scaling based on residuals -->
+      <label for="residualScalingCheckbox">Enable dt scaling by residuals:</label>
+      <input type="checkbox" id="residualScalingCheckbox">
 
       <!-- NEW: Updated Viscosity Control Section -->
       <h2>Viscosity Control</h2>
@@ -165,6 +168,9 @@
 
     // NEW: Global variable to track the last pressure residual from pressure correction
     let lastPResidual = 0;
+
+    // NEW: Global variable to control dt scaling based on residuals (default disabled)
+    let residualScalingEnabled = false;
 
     function precomputeObstacleMask() {
       obstacleMask = new Array(Nx * Ny).fill(false);
@@ -288,15 +294,20 @@
       const previousDt = dt;
       let dt_cfl = computeAutomaticTimeStep(); // dt based solely on CFL
       
-      // Define a pressure tolerance (adjust as needed)
-      const pressureTol = 1e-3;
-      let dt_pressure = dt_cfl;
-      if(maxPressureResidual > pressureTol) {
-          // Scale dt based on the pressure error ratio using the maximum pressure residual from substeps.
-          dt_pressure = dt_cfl * (pressureTol / (maxPressureResidual + 1e-10));
+      let newDt;
+      if (residualScalingEnabled) {
+         // Define a pressure tolerance (adjust as needed)
+         const pressureTol = 1e-3;
+         let dt_pressure = dt_cfl;
+         if(maxPressureResidual > pressureTol) {
+             // Scale dt based on the pressure error ratio using the maximum pressure residual from substeps.
+             dt_pressure = dt_cfl * (pressureTol / (maxPressureResidual + 1e-10));
+         }
+         // Choose the more restrictive time step
+         newDt = Math.min(dt_cfl, dt_pressure);
+      } else {
+         newDt = dt_cfl;
       }
-      // Choose the more restrictive time step
-      let newDt = Math.min(dt_cfl, dt_pressure);
       
       // Limit dt increase compared to the previous dt (to keep dt changes smooth)
       const maxIncreaseFactor = 1.1;
@@ -748,12 +759,43 @@
       residualCtx.stroke();
     }
 
+    // NEW: Draw the legend for field values in the legend canvas
+    function drawLegend() {
+      let width = legendCanvas.width;
+      let height = legendCanvas.height;
+      // Create a horizontal gradient
+      let gradient = legendCtx.createLinearGradient(0, 0, width, 0);
+      for (let i = 0; i <= 10; i++) {
+        let value = i / 10;
+        let color = getColorForValue(value);
+        gradient.addColorStop(value, color);
+      }
+      // Clear the legend canvas
+      legendCtx.clearRect(0, 0, width, height);
+      // Fill the canvas with the gradient
+      legendCtx.fillStyle = gradient;
+      legendCtx.fillRect(0, 0, width, height);
+
+      // Draw ticks and labels
+      legendCtx.fillStyle = "black";
+      legendCtx.font = "10px Arial";
+      for (let i = 0; i <= 10; i++) {
+        let x = (i / 10) * width;
+        legendCtx.beginPath();
+        legendCtx.moveTo(x, height);
+        legendCtx.lineTo(x, height - 5);
+        legendCtx.stroke();
+        legendCtx.fillText((i / 10).toFixed(1), x - 8, height - 7);
+      }
+    }
+
     /******************** Animation Loop ********************/
     function simulationLoop() {
       if(!simulationRunning) return;
       updateSimulation();
       drawSimulation();
       drawResidualGraph();
+      drawLegend();
       requestAnimationFrame(simulationLoop);
     }
 
@@ -798,6 +840,12 @@
     });
     pressureSolverSelect.addEventListener("change", function() {
       currentPressureSolver = pressureSolverSelect.value;
+    });
+
+    // NEW: Event listener for dt scaling checkbox
+    const residualScalingCheckbox = document.getElementById("residualScalingCheckbox");
+    residualScalingCheckbox.addEventListener("change", function() {
+      residualScalingEnabled = residualScalingCheckbox.checked;
     });
 
     // Initialize simulation when page loads
