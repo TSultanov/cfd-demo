@@ -170,6 +170,8 @@
     // u: horizontal velocity defined at vertical faces ((Nx+1) x Ny)
     // v: vertical velocity defined at horizontal faces (Nx x (Ny+1))
     let u, v, p;
+    // NEW: Global arrays for previous time step velocities for extrapolation
+    let uPrev, vPrev;
     let obstacle; // obstacle mask on pressure grid (size Nx x Ny)
 
     // --- Pre-allocated temporary buffers to avoid dynamic allocations during simulation ---
@@ -221,6 +223,10 @@
       v = new Float32Array(Nx * (Ny+1));
       p = new Float32Array(Nx * Ny);
       
+      // NEW: Initialize previous velocity fields for extrapolation
+      uPrev = new Float32Array(u);
+      vPrev = new Float32Array(v);
+      
       // --- Pre-allocate temporary buffers ---
       uOld = new Float32Array(u.length);
       vOld = new Float32Array(v.length);
@@ -249,6 +255,16 @@
 
     /******************** Updated Simulation Update with PISO Algorithm (Staggered Grid) ********************/
     function updateSimulation() {
+      // NEW: Extrapolate velocity fields for a better initial guess using previous time step values
+      if (simulationStepCount > 0) {
+        for (let i = 0; i < u.length; i++){
+          u[i] = 2 * u[i] - uPrev[i]; // extrapolated guess: u^(n+1) = 2u^n – u^(n-1)
+        }
+        for (let i = 0; i < v.length; i++){
+          v[i] = 2 * v[i] - vPrev[i];
+        }
+      }
+      
       // Copy current velocities to pre-allocated buffers for residual computation
       uOld.set(u);
       vOld.set(v);
@@ -336,6 +352,10 @@
       }
       dt = newDt;
       document.getElementById("currentDtValue").textContent = dt.toFixed(3);
+      
+      // NEW: Update previous velocity fields for next time step extrapolation
+      uPrev = new Float32Array(u);
+      vPrev = new Float32Array(v);
     }
 
     /******************** PISO Substep Function (Staggered Grid) ********************/
