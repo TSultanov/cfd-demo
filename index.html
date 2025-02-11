@@ -139,6 +139,34 @@
     let u, v, p;
     let obstacle; // obstacle mask on pressure grid (size Nx x Ny)
 
+    // --- Pre-allocated temporary buffers to avoid dynamic allocations during simulation ---
+    let uOld, vOld, uStar, vStar, rhs, pPrime, pPrime_new;
+
+    // Before the Jacobi iterations, precompute constant denominators
+    const dx2 = dx * dx;
+    const dy2 = dy * dy;
+    const denom = 2 / dx2 + 2 / dy2;
+    const iterations = 50; // Try reducing iterations from 100 if accuracy permits
+
+    // NEW: Precompute boolean mask for the cylindrical obstacle on the pressure grid
+    let obstacleMask; // Global precomputed obstacle mask
+
+    // NEW: Global variable to track the last pressure residual from pressure correction
+    let lastPResidual = 0;
+
+    function precomputeObstacleMask() {
+      obstacleMask = new Array(Nx * Ny).fill(false);
+      for (let j = 0; j < Ny; j++){
+        for (let i = 0; i < Nx; i++){
+          let idx = i + j * Nx;
+          // Pressure cell center position
+          let x = (i + 0.5) * dx;
+          let y = (j + 0.5) * dy;
+          obstacleMask[idx] = isPointInObstacle(x, y);
+        }
+      }
+    }
+
     /******************** Helper Function for Obstacle Check ********************/
     function isPointInObstacle(x, y) {
       let distance = Math.sqrt((x - cylinderCenterX)**2 + (y - cylinderCenterY)**2);
@@ -154,19 +182,21 @@
       v = new Float32Array(Nx * (Ny+1));      // v: Nx columns, (Ny+1) rows
       p = new Float32Array(Nx * Ny);          // p: Nx x Ny
       
-      // Allocate obstacle mask on pressure grid:
-      obstacle = new Array(Nx * Ny).fill(false);
-      for (let j = 0; j < Ny; j++){
-        for (let i = 0; i < Nx; i++){
-          let idx = i + j * Nx;
-          // Pressure cell center position
-          let x = (i + 0.5) * dx;
-          let y = (j + 0.5) * dy;
-          if(isPointInObstacle(x, y)) {
-            obstacle[idx] = true;
-          }
-        }
-      }
+      // --- Pre-allocate temporary buffers ---
+      // For residual computation:
+      uOld = new Float32Array(u.length);
+      vOld = new Float32Array(v.length);
+      // For predictor step:
+      uStar  = new Float32Array(u.length);
+      vStar  = new Float32Array(v.length);
+      // For pressure correction:
+      rhs       = new Float32Array(Nx * Ny);
+      pPrime    = new Float32Array(Nx * Ny);
+      pPrime_new = new Float32Array(Nx * Ny);
+      
+      // ----- Use precomputed obstacle mask for pressure grid -----
+      obstacle = obstacleMask;
+      
       // Clear residual history and text log
       residualHistory = [];
       residualText.value = "";
@@ -177,14 +207,17 @@
 
     /******************** Updated Simulation Update with PISO Algorithm (Staggered Grid) ********************/
     function updateSimulation() {
+      // Copy current velocities to pre-allocated buffers for residual computation
+      uOld.set(u);
+      vOld.set(v);
+      
       // Automatic time step control based on the CFL condition with limited dt change
       let dt_prev = dt;
       let dt_new = computeAutomaticTimeStep();
       const maxIncreaseFactor = 1.1; // maximum allowed increase: 10% per time step
-      // Allow dt to drop freely, but limit dt from growing too fast
       dt = (dt_prev <= 0 || dt_new < dt_prev) ? dt_new : Math.min(dt_new, dt_prev * maxIncreaseFactor);
       document.getElementById("currentDtValue").textContent = dt.toFixed(3);
-
+      
       // Gradually ramp up inlet velocity to avoid shocks
       if(simulationStepCount < rampUpSteps) {
         currentInletVelocity = (simulationStepCount / rampUpSteps) * targetInletVelocity;
@@ -192,17 +225,19 @@
         currentInletVelocity = targetInletVelocity;
       }
       const dt_sub = dt / substepCount;
-
-      // Save copies of u and v for residual computation
-      let uOld = new Float32Array(u);
-      let vOld = new Float32Array(v);
-
+      
+      // NEW: Track the maximum pressure residual across all substeps.
+      let maxPressureResidual = 0;
+      
       // Perform PISO substeps using staggered grid formulas
       for (let sub = 0; sub < substepCount; sub++){
-        pisoStep(dt_sub);
+         pisoStep(dt_sub);
+         if (lastPResidual > maxPressureResidual) {
+            maxPressureResidual = lastPResidual;
+         }
       }
-
-      // Compute residual differences (here we use max difference over u and v arrays)
+      
+      // Compute residual differences for velocity (u and v)
       let maxResidualU = 0;
       let maxResidualV = 0;
       for (let i = 0; i < u.length; i++){
@@ -213,19 +248,11 @@
         let delta = Math.abs(v[i] - vOld[i]);
         if(delta > maxResidualV) maxResidualV = delta;
       }
-
+      
       simulationStepCount++;
-      let logEntry = "Time Step: " + simulationStepCount +
-                     ", Substeps: " + substepCount +
-                     ", U Residual: " + maxResidualU.toExponential(3) +
-                     ", V Residual: " + maxResidualV.toExponential(3) + "\n";
-      residualText.value += logEntry;
-      residualText.scrollTop = residualText.scrollHeight;
-      residualHistory.push({step: simulationStepCount, residual: maxResidualU});
-      residualHistory.push({step: simulationStepCount, residual: maxResidualV});
-
-      // Adjust substep count based on error estimation
-      let errorNorm = Math.max(maxResidualU, maxResidualV);
+      
+      // NEW: Include the pressure residual (maxPressureResidual) in the error norm.
+      let errorNorm = Math.max(maxResidualU, maxResidualV, maxPressureResidual);
       const tolerance = 1e-3;
       if (errorNorm > tolerance) {
           let factor = errorNorm / tolerance;
@@ -233,20 +260,32 @@
       } else if (errorNorm < tolerance / 10 && substepCount > 1) {
           substepCount = Math.max(Math.floor(substepCount / 2), 1);
       }
+      
+      // NEW: Log all three residuals: U, V, and P
+      let logEntry = "Time Step: " + simulationStepCount +
+                     ", Substeps: " + substepCount +
+                     ", U Residual: " + maxResidualU.toExponential(3) +
+                     ", V Residual: " + maxResidualV.toExponential(3) +
+                     ", P Residual: " + maxPressureResidual.toExponential(3) + "\n";
+      residualText.value += logEntry;
+      residualText.scrollTop = residualText.scrollHeight;
+      
+      // NEW: Push the residuals to the history for graphing
+      residualHistory.push({step: simulationStepCount, residual: maxResidualU});
+      residualHistory.push({step: simulationStepCount, residual: maxResidualV});
+      residualHistory.push({step: simulationStepCount, residual: maxPressureResidual});
     }
 
     /******************** PISO Substep Function (Staggered Grid) ********************/
     function pisoStep(dt_sub) {
-      // Predictor: create provisional velocities uStar and vStar
-      let uStar = new Float32Array(u);
-      let vStar = new Float32Array(v);
-
+      // Predictor: create provisional velocities using pre-allocated buffers
+      uStar.set(u);
+      vStar.set(v);
+      
       // ----------------- Predictor for u -----------------
-      // Loop over interior u faces (i=1...Nx-1, j=1...Ny-1 for safe differences)
       for (let j = 1; j < Ny - 1; j++){
         for (let i = 1; i < Nx; i++){
           let idx = i + j * (Nx+1);
-          // Physical location of u: (i*dx, (j+0.5)*dy)
           let x = i * dx;
           let y = (j + 0.5) * dy;
           if(isPointInObstacle(x, y)) {
@@ -255,36 +294,30 @@
           }
           let idx_e = (i+1) + j * (Nx+1);
           let idx_w = (i-1) + j * (Nx+1);
-          // ===== Modified: Use upwind differencing for du/dx =====
           let du_dx;
           if(u[idx] >= 0) {
               du_dx = (u[idx] - u[idx_w]) / dx;
           } else {
               du_dx = (u[idx_e] - u[idx]) / dx;
           }
-          // Interpolate v at u location by averaging the four neighboring v values
           let v_avg = ( v[(i-1) + j * Nx] + v[i + j * Nx] +
                         v[(i-1) + (j+1) * Nx] + v[i + (j+1) * Nx] ) / 4;
-          // ===== Modified: Use upwind differencing for du/dy based on v_avg =====
           let du_dy;
           if(v_avg >= 0) {
               du_dy = (u[idx] - u[i + (j-1)*(Nx+1)]) / dy;
           } else {
               du_dy = (u[i + (j+1)*(Nx+1)] - u[idx]) / dy;
           }
-          let idx_e_val = (i+1) + j * (Nx+1); // for laplacian use same indices
           let lap_u = (u[idx_e] - 2*u[idx] + u[idx_w])/(dx*dx)
                       + (u[i + (j+1)*(Nx+1)] - 2*u[idx] + u[i + (j-1)*(Nx+1)])/(dy*dy);
           uStar[idx] = u[idx] + dt_sub * ( - (u[idx]*du_dx + v_avg*du_dy) + nu * lap_u );
         }
       }
-
+      
       // ----------------- Predictor for v -----------------
-      // Loop over interior v faces (i=1...Nx-2, j=1...Ny-1)
       for (let j = 1; j < Ny; j++){
         for (let i = 1; i < Nx - 1; i++){
           let idx = i + j * Nx;
-          // Physical location of v: ((i+0.5)*dx, j*dy)
           let x = (i + 0.5) * dx;
           let y = j * dy;
           if(isPointInObstacle(x, y)) {
@@ -293,16 +326,13 @@
           }
           let idx_n = i + (j+1) * Nx;
           let idx_s = i + (j-1) * Nx;
-          // ===== Modified: Use upwind differencing for dv/dy =====
           let dv_dy;
           if(v[idx] >= 0) {
               dv_dy = (v[idx] - v[i + (j-1)*Nx]) / dy;
           } else {
               dv_dy = (v[idx_n] - v[idx]) / dy;
           }
-          // Interpolate u at v location by averaging the two adjacent u values
           let u_avg = ( u[(i+1) + j*(Nx+1)] + u[i + j*(Nx+1)] ) / 2;
-          // ===== Modified: Use upwind differencing for dv/dx based on u_avg =====
           let dv_dx;
           if(u_avg >= 0) {
               dv_dx = (v[idx] - v[(i-1) + j * Nx]) / dx;
@@ -314,10 +344,10 @@
           vStar[idx] = v[idx] + dt_sub * ( - (u_avg * dv_dx + v[idx]*dv_dy) + nu * lap_v );
         }
       }
-
+      
       // ----------------- Pressure Correction (MAC form) -----------------
-      // Compute divergence at pressure cell centers using staggered velocities:
-      let rhs = new Float32Array(Nx*Ny);
+      // Use pre-allocated global buffer 'rhs' and reset its values
+      rhs.fill(0);
       for (let j = 0; j < Ny; j++){
         for (let i = 0; i < Nx; i++){
           let u_right = uStar[(i+1) + j*(Nx+1)];
@@ -328,68 +358,83 @@
           rhs[i+j*Nx] = div / dt_sub;
         }
       }
+      
       // Solve for pressure correction pPrime using Jacobi iteration on pressure cells
-      let pPrime = new Float32Array(Nx*Ny);
-      const iterations = 100;
+      // NEW: Store the final pressure residual to later log and use in tolerance comparisons.
+      pPrime.fill(0);
       const omega = 0.7;  // relaxation factor
+      const pressureTolerance = 1e-6; // tolerance for early exit
+      let finalPResidual = Infinity;  // NEW: initialize variable to track pressure residual
       for (let iter = 0; iter < iterations; iter++){
-        let pPrime_new = new Float32Array(Nx*Ny);
-        for (let j = 1; j < Ny-1; j++){
-          for (let i = 1; i < Nx-1; i++){
-            let idx = i + j * Nx;
-            let p_update = ((pPrime[(i+1)+j*Nx] + pPrime[(i-1)+j*Nx])/(dx*dx) +
-                           (pPrime[i+(j+1)*Nx] + pPrime[i+(j-1)*Nx])/(dy*dy) -
-                            rhs[idx]) / (2/(dx*dx) + 2/(dy*dy));
-            // ===== Modified: Under-relax the pressure correction =====
-            pPrime_new[idx] = omega * p_update + (1 - omega) * pPrime[idx];
+          // Reset the global buffer for updated pressure corrections
+          pPrime_new.fill(0);
+          for (let j = 1; j < Ny-1; j++){
+            for (let i = 1; i < Nx-1; i++){
+              let idx = i + j * Nx;
+              let p_update = ((pPrime[(i+1)+j*Nx] + pPrime[(i-1)+j*Nx])/(dx*dx) +
+                             (pPrime[i+(j+1)*Nx] + pPrime[i+(j-1)*Nx])/(dy*dy) -
+                              rhs[idx]) / denom;
+              // Under-relax the pressure correction
+              pPrime_new[idx] = omega * p_update + (1 - omega) * pPrime[idx];
+            }
           }
-        }
-        // Update interior cells
-        for (let j = 1; j < Ny-1; j++){
-          for (let i = 1; i < Nx-1; i++){
-            let idx = i + j * Nx;
-            pPrime[idx] = pPrime_new[idx];
+          // Compute maximum difference for early exit
+          let maxError = 0;
+          for (let j = 1; j < Ny-1; j++){
+            for (let i = 1; i < Nx-1; i++){
+              let idx = i + j * Nx;
+              let error = Math.abs(pPrime_new[idx] - pPrime[idx]);
+              if(error > maxError) maxError = error;
+            }
           }
-        }
-        // Neumann BC for bottom and top boundaries
-        for (let i = 0; i < Nx; i++){
-          pPrime[i] = pPrime[i+Nx]; // bottom
-          pPrime[i + (Ny-1)*Nx] = pPrime[i + (Ny-2)*Nx]; // top
-        }
-        // Update left and outlet (right) boundaries
-        for (let j = 0; j < Ny; j++){
-          pPrime[0+j*Nx] = pPrime[1+j*Nx]; // left (inlet)
-          pPrime[Nx-1+j*Nx] = 0; // outlet: enforce fixed pressure (Dirichlet condition)
-        }
+          finalPResidual = maxError; // NEW: update final pressure residual
+          
+          // Update interior cells from pPrime_new to pPrime
+          for (let j = 1; j < Ny-1; j++){
+            for (let i = 1; i < Nx-1; i++){
+              let idx = i + j * Nx;
+              pPrime[idx] = pPrime_new[idx];
+            }
+          }
+          // Neumann BC for bottom and top boundaries
+          for (let i = 0; i < Nx; i++){
+            pPrime[i] = pPrime[i+Nx]; // bottom
+            pPrime[i + (Ny-1)*Nx] = pPrime[i + (Ny-2)*Nx]; // top
+          }
+          // Update left and outlet (right) boundaries
+          for (let j = 0; j < Ny; j++){
+            pPrime[0+j*Nx] = pPrime[1+j*Nx]; // left (inlet)
+            pPrime[Nx-1+j*Nx] = 0; // outlet: enforce fixed pressure (Dirichlet condition)
+          }
+          if(maxError < pressureTolerance) break;
       }
-
+      // NEW: Save the final pressure residual for logging and tolerance computations.
+      lastPResidual = finalPResidual;
+      
       // ----------------- Corrector Step -----------------
-      // Update u using pressure correction (u face lies between pressure cells)
       for (let j = 0; j < Ny; j++){
         for (let i = 1; i < Nx; i++){
           let idx = i + j * (Nx+1);
-          let pPrime_right = pPrime[i + j * Nx];      // pressure correction from cell to the right
-          let pPrime_left  = pPrime[(i-1) + j * Nx];    // pressure correction from cell to the left
+          let pPrime_right = pPrime[i + j * Nx];
+          let pPrime_left  = pPrime[(i-1) + j * Nx];
           u[idx] = uStar[idx] - dt_sub * (pPrime_right - pPrime_left) / dx;
         }
       }
-      // Update v (v face lies between pressure cells vertically)
       for (let j = 1; j < Ny; j++){
         for (let i = 0; i < Nx; i++){
           let idx = i + j * Nx;
-          let pPrime_top    = pPrime[i + j * Nx];        // pressure correction in cell above
-          let pPrime_bottom = pPrime[i + (j-1) * Nx];      // pressure correction in cell below
+          let pPrime_top    = pPrime[i + j * Nx];
+          let pPrime_bottom = pPrime[i + (j-1) * Nx];
           v[idx] = vStar[idx] - dt_sub * (pPrime_top - pPrime_bottom) / dy;
         }
       }
-      // Now update the cumulative pressure field
       for (let j = 0; j < Ny; j++){
         for (let i = 0; i < Nx; i++){
           let idx = i + j * Nx;
           p[idx] += pPrime[idx];
         }
       }
-
+      
       // Enforce boundary conditions on the updated velocities
       applyBoundaryConditions();
     }
@@ -675,6 +720,7 @@
 
     // Initialize simulation when page loads
     window.onload = function() {
+      precomputeObstacleMask();
       initSimulation();
     }
 
