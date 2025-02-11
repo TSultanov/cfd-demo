@@ -64,7 +64,7 @@
       <!-- NEW: Updated Viscosity Control Section -->
       <h2>Viscosity Control</h2>
       <label for="viscosityInput">Viscosity (m²/s):</label>
-      <input type="number" id="viscosityInput" min="0.0001" max="0.1" step="0.001" value="0.001">
+      <input type="number" id="viscosityInput" min="0.000001" max="0.1" step="0.000001" value="0.000001">
 
       <!-- NEW: Pressure Solver Selection -->
       <h2>Pressure Solver</h2>
@@ -90,26 +90,28 @@
   
   <script>
     /******************** Simulation Setup and Global Variables ********************/
-    // UPDATED: For staggered grid, we now define the pressure grid with Nx x Ny cells.
-    const Nx = 200; // number of pressure cells in x
-    const Ny = 132;  // number of pressure cells in y
-    const Lx = 10;  
-    const Ly = 6.6;
-    // NEW: For pressure cells we use:
+    // UPDATED: Adjust channel and obstacle dimensions for robust vortex street formation.
+    const Nx = 400; // updated number of pressure cells in x (increased resolution for extended channel)
+    const Ny = 132; // updated number of pressure cells in y for refined resolution
+    const Lx = 30;  // updated channel length (longer domain to allow wake development)
+    const Ly = 10;  // updated channel height (moderate confinement)
     const dx = Lx / Nx;
     const dy = Ly / Ny;
     
     // Global cylinder parameters for the obstacle (in SI units)
-    const cylinderRadius = 0.5;  // meters
-    const cylinderCenterX = Lx / 3;  // x-coordinate for cylinder center
-    const cylinderCenterY = Ly / 2;  // y-coordinate for cylinder center
+    const cylinderRadius = 0.75;  // updated cylinder radius for stronger blocking effect
+    const cylinderCenterX = Lx / 4;  // updated: place cylinder at one-fourth of the channel length (e.g., x = 7.5 m)
+    const cylinderCenterY = Ly / 2;  // center vertically remains unchanged
 
     // Canvas and contexts
     const canvas = document.getElementById("simulationCanvas");
     const ctx = canvas.getContext("2d");
+    // NEW: Disable image smoothing to avoid grid (anti-aliasing) artifacts.
+    ctx.imageSmoothingEnabled = false;
 
     const legendCanvas = document.getElementById("legendCanvas");
     const legendCtx = legendCanvas.getContext("2d");
+    legendCtx.imageSmoothingEnabled = false; // likewise for legend if needed
 
     const residualCanvas = document.getElementById("residualCanvas");
     const residualCtx = residualCanvas.getContext("2d");
@@ -138,7 +140,7 @@
     let simulationStepCount = 0;
     let substepCount = 5; // Initial number of sub-timesteps
     let dt = parseFloat(timeStepInput.value);
-    let nu = 0.01; // kinematic viscosity (m^2/s)
+    let nu = 0.000001; // kinematic viscosity of water (m^2/s)
     let currentInletVelocity = 0;
     let targetInletVelocity = parseFloat(inletVelocitySlider.value);
     const rampUpSteps = 1000;  // Ramp inlet from 0 to set value over 1000 time steps
