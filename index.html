@@ -973,7 +973,7 @@
       
       // Regular visualization branch: (e.g., velocity, pressure, vorticity)
       // Use pressure grid dimensions for visualization
-      const cellSize = canvas.width / Nx;
+      const cellSize = Math.ceil(canvas.width / Nx);
       const domainWidth = Nx * cellSize;
       const domainHeight = Ny * cellSize;
       const offsetX = (canvas.width - domainWidth) / 2;
