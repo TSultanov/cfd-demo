@@ -69,6 +69,7 @@
       <select id="pressureSolverSelect">
         <option value="jacobi" selected>Jacobi Iteration</option>
         <option value="sor">Successive Over-Relaxation (SOR)</option>
+        <option value="multigrid">Multigrid V-Cycle</option>
       </select>
 
       <h2>Simulation Control</h2>
@@ -404,7 +405,28 @@
               if (maxError < pressureTolerance) break;
           }
           lastPResidual = finalPResidual;
-      } else {
+      } else if (currentPressureSolver === "multigrid") {
+          // ---------- Pressure Correction using Multigrid V-Cycle ----------
+          pPrime.fill(0); // initialize pressure correction field
+          // Run several V-cycles to further smooth the solution and reduce stripe artifacts.
+          let numCycles = 3;
+          for (let cycle = 0; cycle < numCycles; cycle++){
+              mgVcycle(pPrime, rhs, Nx, Ny, dx, dy);
+          }
+          // Compute final residual for logging
+          let maxError = 0;
+          const denomLocal = 2/(dx*dx) + 2/(dy*dy);
+          for (let j = 1; j < Ny-1; j++){
+              for (let i = 1; i < Nx-1; i++){
+                  let idx = i + j * Nx;
+                  let r = ((pPrime[(i+1)+j*Nx] + pPrime[(i-1)+j*Nx])/(dx*dx) +
+                           (pPrime[i+(j+1)*Nx] + pPrime[i+(j-1)*Nx])/(dy*dy) -
+                           denomLocal * pPrime[idx] - rhs[idx]);
+                  if (Math.abs(r) > maxError) maxError = Math.abs(r);
+              }
+          }
+          lastPResidual = maxError;
+      } else { // Default: Pressure Correction using Jacobi Iteration
           // ---------- Pressure Correction using Jacobi Iteration ----------
           pPrime.fill(0);
           const jacobiOmega = 0.7;
@@ -442,7 +464,7 @@
               }
               for (let j = 0; j < Ny; j++){
                   pPrime[0+j*Nx] = pPrime[1+j*Nx]; // left (inlet)
-                  pPrime[Nx-1+j*Nx] = 0; // outlet: enforce fixed pressure (Dirichlet)
+                  pPrime[Nx-1+j*Nx] = 0; // outlet: enforce fixed pressure
               }
               if (maxError < pressureTolerance) break;
           }
@@ -786,6 +808,134 @@
       // Cap dt_cfl to the user-selected dt value
       let dt_user = parseFloat(timeStepInput.value);
       return Math.min(dt_cfl, dt_user);
+    }
+
+    /******************** Multigrid Solver Functions ********************/
+
+    // Simple Jacobi smoother for multigrid; smoothes the interior cells.
+    function mgSmooth(p, rhs, nx, ny, dx, dy, iterations) {
+      let p_new = new Float32Array(p.length);
+      const denomLocal = 2/(dx*dx) + 2/(dy*dy);
+      for (let iter = 0; iter < iterations; iter++){
+        for (let j = 1; j < ny - 1; j++){
+          for (let i = 1; i < nx - 1; i++){
+            let idx = i + j * nx;
+            let p_e = p[idx + 1];
+            let p_w = p[idx - 1];
+            let p_n = p[i + (j+1)*nx];
+            let p_s = p[i + (j-1)*nx];
+            p_new[idx] = ((p_e + p_w)/(dx*dx) + (p_n + p_s)/(dy*dy) - rhs[idx]) / denomLocal;
+          }
+        }
+        // Update interior cells with the smoothed values
+        for (let j = 1; j < ny - 1; j++){
+          for (let i = 1; i < nx - 1; i++){
+            let idx = i + j * nx;
+            p[idx] = p_new[idx];
+          }
+        }
+      }
+    }
+
+    // Restrict fine grid residual to a coarser grid using full weighting.
+    function mgRestrict(fine, nx_f, ny_f, nx_c, ny_c) {
+      let coarse = new Float32Array(nx_c * ny_c);
+      for (let j = 1; j < ny_c - 1; j++){
+        for (let i = 1; i < nx_c - 1; i++){
+          let fi = 2 * i;
+          let fj = 2 * j;
+          let idx_coarse = i + j * nx_c;
+          let sum = fine[fi + fj*nx_f] +
+                    0.5 * (fine[(fi-1) + fj*nx_f] + fine[(fi+1) + fj*nx_f] + fine[fi + (fj-1)*nx_f] + fine[fi + (fj+1)*nx_f]) +
+                    0.25*(fine[(fi-1) + (fj-1)*nx_f] + fine[(fi-1) + (fj+1)*nx_f] + fine[(fi+1) + (fj-1)*nx_f] + fine[(fi+1) + (fj+1)*nx_f]);
+          coarse[idx_coarse] = sum / 4;
+        }
+      }
+      // Set boundaries by simple injection
+      for (let i = 0; i < nx_c; i++){
+        coarse[i] = fine[2*i]; // bottom row
+        coarse[i + (ny_c - 1) * nx_c] = fine[2*i + (ny_f - 1) * nx_f]; // top row
+      }
+      for (let j = 0; j < ny_c; j++){
+        coarse[0 + j * nx_c] = fine[0 + (2*j)*nx_f]; // left boundary
+        coarse[(nx_c-1) + j * nx_c] = fine[(nx_f - 1) + (2*j)*nx_f]; // right boundary
+      }
+      return coarse;
+    }
+
+    // Updated prolongation using bilinear interpolation to reduce stripey artifacts.
+    function mgProlongate(coarse, nx_c, ny_c, nx_f, ny_f) {
+      let fine = new Float32Array(nx_f * ny_f);
+      for (let j = 0; j < ny_f; j++){
+        // Compute the fractional coarse grid coordinate in y
+        let y_coarse = j / 2.0;
+        let j0 = Math.floor(y_coarse);
+        let j1 = Math.min(j0 + 1, ny_c - 1);
+        let b = y_coarse - j0;
+        for (let i = 0; i < nx_f; i++){
+          // Compute the fractional coarse grid coordinate in x
+          let x_coarse = i / 2.0;
+          let i0 = Math.floor(x_coarse);
+          let i1 = Math.min(i0 + 1, nx_c - 1);
+          let a = x_coarse - i0;
+          // Bilinear interpolation from the coarse grid:
+          fine[i + j * nx_f] = 
+             (1 - a) * (1 - b) * coarse[i0 + j0 * nx_c] +
+             a * (1 - b) * coarse[i1 + j0 * nx_c] +
+             (1 - a) * b * coarse[i0 + j1 * nx_c] +
+             a * b * coarse[i1 + j1 * nx_c];
+        }
+      }
+      return fine;
+    }
+
+    // Multigrid V-Cycle recursive solver.
+    function mgVcycle(p, rhs, nx, ny, dx, dy) {
+      const denomLocal = 2/(dx*dx) + 2/(dy*dy);
+      // Pre-smoothing: increase iterations to 5 to reduce high-frequency errors.
+      mgSmooth(p, rhs, nx, ny, dx, dy, 5);
+      
+      // Compute residual: r = rhs - A*p for interior points.
+      let r = new Float32Array(nx * ny);
+      for (let j = 1; j < ny - 1; j++){
+        for (let i = 1; i < nx - 1; i++){
+          let idx = i + j * nx;
+          let p_e = p[idx + 1];
+          let p_w = p[idx - 1];
+          let p_n = p[i + (j+1)*nx];
+          let p_s = p[i + (j-1)*nx];
+          let Ap = (p_e + p_w)/(dx*dx) + (p_n + p_s)/(dy*dy) - denomLocal * p[idx];
+          r[idx] = rhs[idx] - Ap;
+        }
+      }
+      
+      // If the grid is too coarse, solve directly with extra smoothing.
+      if (nx <= 4 || ny <= 4) {
+        mgSmooth(p, rhs, nx, ny, dx, dy, 10);
+        return;
+      }
+      
+      // Restrict the residual to the coarse grid.
+      let nx_c = Math.floor((nx + 1) / 2);
+      let ny_c = Math.floor((ny + 1) / 2);
+      let r_coarse = mgRestrict(r, nx, ny, nx_c, ny_c);
+      
+      // Initialize the error on the coarse grid to zero.
+      let e_coarse = new Float32Array(nx_c * ny_c);
+      
+      // Recursively solve for the error on the coarse grid (one V-cycle).
+      mgVcycle(e_coarse, r_coarse, nx_c, ny_c, 2*dx, 2*dy);
+      
+      // Prolongate the coarse grid error to the fine grid.
+      let e_fine = mgProlongate(e_coarse, nx_c, ny_c, nx, ny);
+      
+      // Correct the fine grid solution.
+      for (let i = 0; i < p.length; i++){
+        p[i] += e_fine[i];
+      }
+      
+      // Post-smoothing: increase iterations to 5.
+      mgSmooth(p, rhs, nx, ny, dx, dy, 5);
     }
   </script>
 </body>
