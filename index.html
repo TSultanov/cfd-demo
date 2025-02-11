@@ -57,16 +57,16 @@
       <label for="timeStepInput">Time Step (s):</label>
       <input type="number" id="timeStepInput" step="0.001" value="0.5">
       <p>Current dt: <span id="currentDtValue">0.5</span></p>
-      <!-- NEW: Checkbox to enable/disable dt scaling based on residuals -->
+      <!-- Checkbox to enable/disable dt scaling by residuals -->
       <label for="residualScalingCheckbox">Enable dt scaling by residuals:</label>
       <input type="checkbox" id="residualScalingCheckbox">
 
-      <!-- NEW: Updated Viscosity Control Section -->
+      <!-- Viscosity Control -->
       <h2>Viscosity Control</h2>
       <label for="viscosityInput">Viscosity (m²/s):</label>
       <input type="number" id="viscosityInput" min="0.000001" max="0.1" step="0.000001" value="0.000001">
 
-      <!-- NEW: Pressure Solver Selection -->
+      <!-- Pressure Solver -->
       <h2>Pressure Solver</h2>
       <label for="pressureSolverSelect">Choose Pressure Solver:</label>
       <select id="pressureSolverSelect">
@@ -90,11 +90,11 @@
   
   <script>
     /******************** Simulation Setup and Global Variables ********************/
-    // UPDATED: Adjust channel and obstacle dimensions for robust vortex street formation.
-    const Nx = 400; // updated number of pressure cells in x (increased resolution for extended channel)
-    const Ny = 132; // updated number of pressure cells in y for refined resolution
-    const Lx = 30;  // updated channel length (longer domain to allow wake development)
-    const Ly = 10;  // updated channel height (moderate confinement)
+    // Adjust channel and obstacle dimensions for robust vortex street formation.
+    const Nx = 400; // number of pressure cells in x (increased resolution for extended channel)
+    const Ny = 132; // number of pressure cells in y for refined resolution
+    const Lx = 30;  // channel length (longer domain to allow wake development)
+    const Ly = 10;  // channel height (moderate confinement)
     const dx = Lx / Nx;
     const dy = Ly / Ny;
     
@@ -106,7 +106,7 @@
     // Canvas and contexts
     const canvas = document.getElementById("simulationCanvas");
     const ctx = canvas.getContext("2d");
-    // NEW: Disable image smoothing to avoid grid (anti-aliasing) artifacts.
+    // Disable image smoothing to avoid grid (anti-aliasing) artifacts.
     ctx.imageSmoothingEnabled = false;
 
     const legendCanvas = document.getElementById("legendCanvas");
@@ -165,13 +165,13 @@
     const denom = 2 / dx2 + 2 / dy2;
     const iterations = 50; // Try reducing iterations from 100 if accuracy permits
 
-    // NEW: Precompute boolean mask for the cylindrical obstacle on the pressure grid
+    // Precompute boolean mask for the cylindrical obstacle on the pressure grid
     let obstacleMask; // Global precomputed obstacle mask
 
-    // NEW: Global variable to track the last pressure residual from pressure correction
+    // Global variable to track the last pressure residual from pressure correction
     let lastPResidual = 0;
 
-    // NEW: Global variable to control dt scaling based on residuals (default disabled)
+    // Global variable to control dt scaling based on residuals (default disabled)
     let residualScalingEnabled = false;
 
     function precomputeObstacleMask() {
@@ -239,7 +239,7 @@
       }
       const dt_sub = dt / substepCount;
       
-      // NEW: Track the maximum pressure residual across all substeps.
+      // Track the maximum pressure residual across all substeps.
       let maxPressureResidual = 0;
       
       // Perform PISO substeps using staggered grid formulas
@@ -264,7 +264,7 @@
       
       simulationStepCount++;
       
-      // NEW: Include the pressure residual (maxPressureResidual) in the error norm.
+      // Include the pressure residual (maxPressureResidual) in the error norm.
       let errorNorm = Math.max(maxResidualU, maxResidualV, maxPressureResidual);
       const tolerance = 1e-3;
       if (errorNorm > tolerance) {
@@ -274,7 +274,7 @@
           substepCount = Math.max(Math.floor(substepCount / 2), 1);
       }
       
-      // NEW: Log all three residuals: U, V, and P
+      // Log all three residuals: U, V, and P
       let logEntry = "Time Step: " + simulationStepCount +
                      ", Substeps: " + substepCount +
                      ", U Residual: " + maxResidualU.toExponential(3) +
@@ -283,16 +283,12 @@
       residualText.value += logEntry;
       residualText.scrollTop = residualText.scrollHeight;
       
-      // NEW: Push the residuals to the history for graphing
+      // Push the residuals to the history for graphing
       residualHistory.push({step: simulationStepCount, residual: maxResidualU});
       residualHistory.push({step: simulationStepCount, residual: maxResidualV});
       residualHistory.push({step: simulationStepCount, residual: maxPressureResidual});
 
-      // ===========================================================================
-      // NEW: Adjust the global time step (dt) for the next simulation step based on:
-      //       - the CFL condition (velocity-based) from computeAutomaticTimeStep()
-      //       - the pressure residual (reduce dt if pressure error is high)
-      // ===========================================================================
+      // Adjust the global time step (dt) for the next simulation step based on the CFL condition and pressure residual.
       const previousDt = dt;
       let dt_cfl = computeAutomaticTimeStep(); // dt based solely on CFL
       
@@ -555,7 +551,7 @@
         u[idxOutlet] = u[idxInterior];
       }
       
-      /* NEW: Enforce no-slip for the domain top and bottom on u.
+      /* Enforce no-slip for the domain top and bottom on u.
          Since u is defined on vertical faces (rows j: 0 to Ny-1),
          we force u=0 for the bottom row (j=0) and for the top row (j=Ny-1). */
       // Bottom wall (j = 0)
@@ -613,8 +609,8 @@
     /******************** Visualization ********************/
     function drawSimulation() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      // UPDATED: Use pressure grid dimensions for visualization
-      const cellSize = canvas.width / Nx; 
+      // Use pressure grid dimensions for visualization
+      const cellSize = canvas.width / Nx;
       const domainWidth = Nx * cellSize;
       const domainHeight = Ny * cellSize;
       const offsetX = (canvas.width - domainWidth) / 2;
@@ -761,7 +757,7 @@
       residualCtx.stroke();
     }
 
-    // NEW: Draw the legend for field values in the legend canvas
+    // Draw the legend for field values in the legend canvas
     function drawLegend() {
       let width = legendCanvas.width;
       let height = legendCanvas.height;
@@ -844,7 +840,7 @@
       currentPressureSolver = pressureSolverSelect.value;
     });
 
-    // NEW: Event listener for dt scaling checkbox
+    // Event listener for dt scaling checkbox
     const residualScalingCheckbox = document.getElementById("residualScalingCheckbox");
     residualScalingCheckbox.addEventListener("change", function() {
       residualScalingEnabled = residualScalingCheckbox.checked;
@@ -932,7 +928,7 @@
       return coarse;
     }
 
-    // Updated prolongation using bilinear interpolation to reduce stripey artifacts.
+    // Prolongation using bilinear interpolation to reduce stripey artifacts.
     function mgProlongate(coarse, nx_c, ny_c, nx_f, ny_f) {
       let fine = new Float32Array(nx_f * ny_f);
       for (let j = 0; j < ny_f; j++){
