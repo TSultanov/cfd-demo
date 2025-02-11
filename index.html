@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>2D Fluid Flow Simulation with PISO Algorithm (Staggered Grid)</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 10px;
+    }
+    #simulationContainer {
+      display: flex;
+      flex-wrap: wrap;
+    }
+    #controls {
+      margin: 10px;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      margin: 10px;
+    }
+    #residualText {
+      width: 100%;
+      height: 100px;
+    }
+  </style>
+</head>
+<body>
+  <h1>2D Fluid Flow Simulation around a Cylindrical Obstacle (Staggered Grid)</h1>
+  <div id="simulationContainer">
+    <!-- Simulation visualization canvas -->
+    <canvas id="simulationCanvas" width="1000" height="660"></canvas>
+    <div id="controls">
+      <h2>Visualization Controls</h2>
+      <button id="velocityButton">Velocity Field</button>
+      <button id="pressureButton">Pressure Field</button>
+      <button id="vorticityButton">Vorticity Field</button>
+      <h3>Legend</h3>
+      <!-- Gradient legend with 10 ticks -->
+      <canvas id="legendCanvas" width="200" height="30"></canvas>
+      <p>
+        Inlet: <span style="color: green">Green</span>, 
+        Walls: <span style="color: magenta">Magenta</span>, 
+        Outlet: <span style="color: blue">Blue</span>
+      </p>
+      <h2>Inlet Velocity Controls</h2>
+      <label for="inletVelocitySlider">Velocity Magnitude (m/s):</label>
+      <input type="range" id="inletVelocitySlider" min="0" max="5" step="0.1" value="1">
+      <span id="inletVelocityValue">1</span>
+      <br>
+      <label for="inletProfileSelect">Velocity Profile:</label>
+      <select id="inletProfileSelect">
+        <option value="uniform">Uniform</option>
+        <option value="parabolic">Parabolic</option>
+      </select>
+      <h2>Time Step Control</h2>
+      <label for="timeStepInput">Time Step (s):</label>
+      <input type="number" id="timeStepInput" step="0.001" value="0.01">
+      <p>Current dt: <span id="currentDtValue">0.01</span></p>
+
+      <!-- NEW: Updated Viscosity Control Section -->
+      <h2>Viscosity Control</h2>
+      <label for="viscosityInput">Viscosity (m²/s):</label>
+      <input type="number" id="viscosityInput" min="0.001" max="0.1" step="0.001" value="0.01">
+
+      <h2>Simulation Control</h2>
+      <button id="startButton">Start</button>
+      <button id="pauseButton">Pause</button>
+      <button id="resetButton">Reset</button>
+    </div>
+  </div>
+  
+  <h2>Residuals Log (shows time step, substeps and residuals for each integration cycle)</h2>
+  <textarea id="residualText" readonly></textarea>
+  
+  <h2>Residuals Graph</h2>
+  <canvas id="residualCanvas" width="600" height="200"></canvas>
+  
+  <script>
+    /******************** Simulation Setup and Global Variables ********************/
+    // UPDATED: For staggered grid, we now define the pressure grid with Nx x Ny cells.
+    const Nx = 200; // number of pressure cells in x
+    const Ny = 132;  // number of pressure cells in y
+    const Lx = 10;  
+    const Ly = 6.6;
+    // NEW: For pressure cells we use:
+    const dx = Lx / Nx;
+    const dy = Ly / Ny;
+    
+    // Global cylinder parameters for the obstacle (in SI units)
+    const cylinderRadius = 0.5;  // meters
+    const cylinderCenterX = Lx / 3;  // x-coordinate for cylinder center
+    const cylinderCenterY = Ly / 2;  // y-coordinate for cylinder center
+
+    // Canvas and contexts
+    const canvas = document.getElementById("simulationCanvas");
+    const ctx = canvas.getContext("2d");
+
+    const legendCanvas = document.getElementById("legendCanvas");
+    const legendCtx = legendCanvas.getContext("2d");
+
+    const residualCanvas = document.getElementById("residualCanvas");
+    const residualCtx = residualCanvas.getContext("2d");
+
+    const residualText = document.getElementById("residualText");
+
+    // UI Elements
+    const velocityButton = document.getElementById("velocityButton");
+    const pressureButton = document.getElementById("pressureButton");
+    const vorticityButton = document.getElementById("vorticityButton");
+    const inletVelocitySlider = document.getElementById("inletVelocitySlider");
+    const inletVelocityValue = document.getElementById("inletVelocityValue");
+    const inletProfileSelect = document.getElementById("inletProfileSelect");
+    const timeStepInput = document.getElementById("timeStepInput");
+    const startButton = document.getElementById("startButton");
+    const pauseButton = document.getElementById("pauseButton");
+    const resetButton = document.getElementById("resetButton");
+    // NEW viscosity UI elements
+    const viscosityInput = document.getElementById("viscosityInput");
+
+    // Simulation state variables
+    let simulationRunning = false;
+    let simulationStepCount = 0;
+    let substepCount = 5; // Initial number of sub-timesteps
+    let dt = parseFloat(timeStepInput.value);
+    let nu = 0.01; // kinematic viscosity (m^2/s)
+    let currentInletVelocity = 0;
+    let targetInletVelocity = parseFloat(inletVelocitySlider.value);
+    const rampUpSteps = 1000;  // Ramp inlet from 0 to set value over 1000 time steps
+    let residualHistory = [];  // For graphing residuals over time
+
+    // NEW: Global variable to control the current visualization mode
+    let currentVisualization = "velocity";
+
+    // NEW: In a staggered grid the arrays have different sizes.
+    // Pressure p: defined on pressure cells (Nx x Ny)
+    // u: horizontal velocity defined at vertical faces ((Nx+1) x Ny)
+    // v: vertical velocity defined at horizontal faces (Nx x (Ny+1))
+    let u, v, p;
+    let obstacle; // obstacle mask on pressure grid (size Nx x Ny)
+
+    /******************** Helper Function for Obstacle Check ********************/
+    function isPointInObstacle(x, y) {
+      let distance = Math.sqrt((x - cylinderCenterX)**2 + (y - cylinderCenterY)**2);
+      return distance <= cylinderRadius;
+    }
+
+    /******************** Initialization ********************/
+    function initSimulation() {
+      simulationStepCount = 0;
+      currentInletVelocity = 0;
+      // Allocate arrays for staggered grid:
+      u = new Float32Array((Nx+1) * Ny);    // u: (Nx+1) columns, Ny rows
+      v = new Float32Array(Nx * (Ny+1));      // v: Nx columns, (Ny+1) rows
+      p = new Float32Array(Nx * Ny);          // p: Nx x Ny
+      
+      // Allocate obstacle mask on pressure grid:
+      obstacle = new Array(Nx * Ny).fill(false);
+      for (let j = 0; j < Ny; j++){
+        for (let i = 0; i < Nx; i++){
+          let idx = i + j * Nx;
+          // Pressure cell center position
+          let x = (i + 0.5) * dx;
+          let y = (j + 0.5) * dy;
+          if(isPointInObstacle(x, y)) {
+            obstacle[idx] = true;
+          }
+        }
+      }
+      // Clear residual history and text log
+      residualHistory = [];
+      residualText.value = "";
+      drawSimulation();
+      drawLegend();
+      drawResidualGraph();
+    }
+
+    /******************** Updated Simulation Update with PISO Algorithm (Staggered Grid) ********************/
+    function updateSimulation() {
+      // Automatic time step control based on the CFL condition with limited dt change
+      let dt_prev = dt;
+      let dt_new = computeAutomaticTimeStep();
+      const maxIncreaseFactor = 1.1; // maximum allowed increase: 10% per time step
+      // Allow dt to drop freely, but limit dt from growing too fast
+      dt = (dt_prev <= 0 || dt_new < dt_prev) ? dt_new : Math.min(dt_new, dt_prev * maxIncreaseFactor);
+      document.getElementById("currentDtValue").textContent = dt.toFixed(3);
+
+      // Gradually ramp up inlet velocity to avoid shocks
+      if(simulationStepCount < rampUpSteps) {
+        currentInletVelocity = (simulationStepCount / rampUpSteps) * targetInletVelocity;
+      } else {
+        currentInletVelocity = targetInletVelocity;
+      }
+      const dt_sub = dt / substepCount;
+
+      // Save copies of u and v for residual computation
+      let uOld = new Float32Array(u);
+      let vOld = new Float32Array(v);
+
+      // Perform PISO substeps using staggered grid formulas
+      for (let sub = 0; sub < substepCount; sub++){
+        pisoStep(dt_sub);
+      }
+
+      // Compute residual differences (here we use max difference over u and v arrays)
+      let maxResidualU = 0;
+      let maxResidualV = 0;
+      for (let i = 0; i < u.length; i++){
+        let delta = Math.abs(u[i] - uOld[i]);
+        if(delta > maxResidualU) maxResidualU = delta;
+      }
+      for (let i = 0; i < v.length; i++){
+        let delta = Math.abs(v[i] - vOld[i]);
+        if(delta > maxResidualV) maxResidualV = delta;
+      }
+
+      simulationStepCount++;
+      let logEntry = "Time Step: " + simulationStepCount +
+                     ", Substeps: " + substepCount +
+                     ", U Residual: " + maxResidualU.toExponential(3) +
+                     ", V Residual: " + maxResidualV.toExponential(3) + "\n";
+      residualText.value += logEntry;
+      residualText.scrollTop = residualText.scrollHeight;
+      residualHistory.push({step: simulationStepCount, residual: maxResidualU});
+      residualHistory.push({step: simulationStepCount, residual: maxResidualV});
+
+      // Adjust substep count based on error estimation
+      let errorNorm = Math.max(maxResidualU, maxResidualV);
+      const tolerance = 1e-3;
+      if (errorNorm > tolerance) {
+          let factor = errorNorm / tolerance;
+          substepCount = Math.min(Math.ceil(substepCount * factor), 20);
+      } else if (errorNorm < tolerance / 10 && substepCount > 1) {
+          substepCount = Math.max(Math.floor(substepCount / 2), 1);
+      }
+    }
+
+    /******************** PISO Substep Function (Staggered Grid) ********************/
+    function pisoStep(dt_sub) {
+      // Predictor: create provisional velocities uStar and vStar
+      let uStar = new Float32Array(u);
+      let vStar = new Float32Array(v);
+
+      // ----------------- Predictor for u -----------------
+      // Loop over interior u faces (i=1...Nx-1, j=1...Ny-1 for safe differences)
+      for (let j = 1; j < Ny - 1; j++){
+        for (let i = 1; i < Nx; i++){
+          let idx = i + j * (Nx+1);
+          // Physical location of u: (i*dx, (j+0.5)*dy)
+          let x = i * dx;
+          let y = (j + 0.5) * dy;
+          if(isPointInObstacle(x, y)) {
+            uStar[idx] = 0;
+            continue;
+          }
+          let idx_e = (i+1) + j * (Nx+1);
+          let idx_w = (i-1) + j * (Nx+1);
+          // ===== Modified: Use upwind differencing for du/dx =====
+          let du_dx;
+          if(u[idx] >= 0) {
+              du_dx = (u[idx] - u[idx_w]) / dx;
+          } else {
+              du_dx = (u[idx_e] - u[idx]) / dx;
+          }
+          // Interpolate v at u location by averaging the four neighboring v values
+          let v_avg = ( v[(i-1) + j * Nx] + v[i + j * Nx] +
+                        v[(i-1) + (j+1) * Nx] + v[i + (j+1) * Nx] ) / 4;
+          // ===== Modified: Use upwind differencing for du/dy based on v_avg =====
+          let du_dy;
+          if(v_avg >= 0) {
+              du_dy = (u[idx] - u[i + (j-1)*(Nx+1)]) / dy;
+          } else {
+              du_dy = (u[i + (j+1)*(Nx+1)] - u[idx]) / dy;
+          }
+          let idx_e_val = (i+1) + j * (Nx+1); // for laplacian use same indices
+          let lap_u = (u[idx_e] - 2*u[idx] + u[idx_w])/(dx*dx)
+                      + (u[i + (j+1)*(Nx+1)] - 2*u[idx] + u[i + (j-1)*(Nx+1)])/(dy*dy);
+          uStar[idx] = u[idx] + dt_sub * ( - (u[idx]*du_dx + v_avg*du_dy) + nu * lap_u );
+        }
+      }
+
+      // ----------------- Predictor for v -----------------
+      // Loop over interior v faces (i=1...Nx-2, j=1...Ny-1)
+      for (let j = 1; j < Ny; j++){
+        for (let i = 1; i < Nx - 1; i++){
+          let idx = i + j * Nx;
+          // Physical location of v: ((i+0.5)*dx, j*dy)
+          let x = (i + 0.5) * dx;
+          let y = j * dy;
+          if(isPointInObstacle(x, y)) {
+            vStar[idx] = 0;
+            continue;
+          }
+          let idx_n = i + (j+1) * Nx;
+          let idx_s = i + (j-1) * Nx;
+          // ===== Modified: Use upwind differencing for dv/dy =====
+          let dv_dy;
+          if(v[idx] >= 0) {
+              dv_dy = (v[idx] - v[i + (j-1)*Nx]) / dy;
+          } else {
+              dv_dy = (v[idx_n] - v[idx]) / dy;
+          }
+          // Interpolate u at v location by averaging the two adjacent u values
+          let u_avg = ( u[(i+1) + j*(Nx+1)] + u[i + j*(Nx+1)] ) / 2;
+          // ===== Modified: Use upwind differencing for dv/dx based on u_avg =====
+          let dv_dx;
+          if(u_avg >= 0) {
+              dv_dx = (v[idx] - v[(i-1) + j * Nx]) / dx;
+          } else {
+              dv_dx = (v[(i+1) + j * Nx] - v[idx]) / dx;
+          }
+          let lap_v = (v[(i+1) + j * Nx] - 2*v[idx] + v[(i-1) + j * Nx])/(dx*dx)
+                      + (v[idx_n] - 2*v[idx] + v[idx_s])/(dy*dy);
+          vStar[idx] = v[idx] + dt_sub * ( - (u_avg * dv_dx + v[idx]*dv_dy) + nu * lap_v );
+        }
+      }
+
+      // ----------------- Pressure Correction (MAC form) -----------------
+      // Compute divergence at pressure cell centers using staggered velocities:
+      let rhs = new Float32Array(Nx*Ny);
+      for (let j = 0; j < Ny; j++){
+        for (let i = 0; i < Nx; i++){
+          let u_right = uStar[(i+1) + j*(Nx+1)];
+          let u_left  = uStar[i + j*(Nx+1)];
+          let v_top    = vStar[i + (j+1)*Nx];
+          let v_bottom = vStar[i + j*Nx];
+          let div = (u_right - u_left)/dx + (v_top - v_bottom)/dy;
+          rhs[i+j*Nx] = div / dt_sub;
+        }
+      }
+      // Solve for pressure correction pPrime using Jacobi iteration on pressure cells
+      let pPrime = new Float32Array(Nx*Ny);
+      const iterations = 100;
+      const omega = 0.7;  // relaxation factor
+      for (let iter = 0; iter < iterations; iter++){
+        let pPrime_new = new Float32Array(Nx*Ny);
+        for (let j = 1; j < Ny-1; j++){
+          for (let i = 1; i < Nx-1; i++){
+            let idx = i + j * Nx;
+            let p_update = ((pPrime[(i+1)+j*Nx] + pPrime[(i-1)+j*Nx])/(dx*dx) +
+                           (pPrime[i+(j+1)*Nx] + pPrime[i+(j-1)*Nx])/(dy*dy) -
+                            rhs[idx]) / (2/(dx*dx) + 2/(dy*dy));
+            // ===== Modified: Under-relax the pressure correction =====
+            pPrime_new[idx] = omega * p_update + (1 - omega) * pPrime[idx];
+          }
+        }
+        // Update interior cells
+        for (let j = 1; j < Ny-1; j++){
+          for (let i = 1; i < Nx-1; i++){
+            let idx = i + j * Nx;
+            pPrime[idx] = pPrime_new[idx];
+          }
+        }
+        // Neumann BC for bottom and top boundaries
+        for (let i = 0; i < Nx; i++){
+          pPrime[i] = pPrime[i+Nx]; // bottom
+          pPrime[i + (Ny-1)*Nx] = pPrime[i + (Ny-2)*Nx]; // top
+        }
+        // Update left and outlet (right) boundaries
+        for (let j = 0; j < Ny; j++){
+          pPrime[0+j*Nx] = pPrime[1+j*Nx]; // left (inlet)
+          pPrime[Nx-1+j*Nx] = 0; // outlet: enforce fixed pressure (Dirichlet condition)
+        }
+      }
+
+      // ----------------- Corrector Step -----------------
+      // Update u using pressure correction (u face lies between pressure cells)
+      for (let j = 0; j < Ny; j++){
+        for (let i = 1; i < Nx; i++){
+          let idx = i + j * (Nx+1);
+          let pPrime_right = pPrime[i + j * Nx];      // pressure correction from cell to the right
+          let pPrime_left  = pPrime[(i-1) + j * Nx];    // pressure correction from cell to the left
+          u[idx] = uStar[idx] - dt_sub * (pPrime_right - pPrime_left) / dx;
+        }
+      }
+      // Update v (v face lies between pressure cells vertically)
+      for (let j = 1; j < Ny; j++){
+        for (let i = 0; i < Nx; i++){
+          let idx = i + j * Nx;
+          let pPrime_top    = pPrime[i + j * Nx];        // pressure correction in cell above
+          let pPrime_bottom = pPrime[i + (j-1) * Nx];      // pressure correction in cell below
+          v[idx] = vStar[idx] - dt_sub * (pPrime_top - pPrime_bottom) / dy;
+        }
+      }
+      // Now update the cumulative pressure field
+      for (let j = 0; j < Ny; j++){
+        for (let i = 0; i < Nx; i++){
+          let idx = i + j * Nx;
+          p[idx] += pPrime[idx];
+        }
+      }
+
+      // Enforce boundary conditions on the updated velocities
+      applyBoundaryConditions();
+    }
+
+    /******************** Boundary Conditions (Staggered Grid) ********************/
+    function applyBoundaryConditions() {
+      // For u:
+      // Inlet: left boundary (i=0) for u; u[0,j] is set to inlet profile.
+      for (let j = 0; j < Ny; j++){
+        let idx = 0 + j*(Nx+1);
+        let y = (j + 0.5) * dy;
+        let profile = inletProfileSelect.value;
+        let inletVal = currentInletVelocity;
+        if(profile === "parabolic") {
+          let center = Ly/2;
+          let radius = Ly/2;
+          inletVal = currentInletVelocity * (1 - Math.pow((y-center)/radius, 2));
+          inletVal = Math.max(inletVal, 0);
+        }
+        u[idx] = inletVal;
+      }
+      // Outlet: right boundary for u (i=Nx)
+      for (let j = 0; j < Ny; j++){
+        let idxOutlet = Nx + j*(Nx+1);
+        let idxInterior = (Nx-1) + j*(Nx+1);
+        u[idxOutlet] = u[idxInterior];
+      }
+      
+      /* NEW: Enforce no-slip for the domain top and bottom on u.
+         Since u is defined on vertical faces (rows j: 0 to Ny-1),
+         we force u=0 for the bottom row (j=0) and for the top row (j=Ny-1). */
+      // Bottom wall (j = 0)
+      for (let i = 0; i < Nx+1; i++){
+         u[i + 0*(Nx+1)] = 0;
+      }
+      // Top wall (j = Ny-1)
+      for (let i = 0; i < Nx+1; i++){
+         u[i + (Ny-1)*(Nx+1)] = 0;
+      }
+      
+      // For v:
+      // Top and bottom boundaries (v faces): v[i,0]=0 and v[i,Ny]=0
+      for (let i = 0; i < Nx; i++){
+        v[i + 0*Nx] = 0;       // bottom
+        v[i + Ny*Nx] = 0;      // top
+      }
+      // Enforce no-slip on obstacle: set u and v to zero at faces lying inside the cylinder
+      for (let j = 0; j < Ny; j++){
+        for (let i = 0; i < Nx+1; i++){
+          let x = i * dx;
+          let y = (j + 0.5) * dy;
+          if(isPointInObstacle(x, y)) {
+            u[i + j*(Nx+1)] = 0;
+          }
+        }
+      }
+      for (let j = 0; j < Ny+1; j++){
+        for (let i = 0; i < Nx; i++){
+          let x = (i + 0.5) * dx;
+          let y = j * dy;
+          if(isPointInObstacle(x, y)) {
+            v[i + j*Nx] = 0;
+          }
+        }
+      }
+    }
+
+    /******************** Utility: Compute Vorticity (cell–centered from staggered fields) ********************/
+    function computeVorticity(i, j) {
+      // Only compute for interior pressure cells (neighbors exist)
+      if(i <= 0 || i >= Nx-1 || j <= 0 || j >= Ny-1) return 0;
+      // Compute cell–centered velocity (averaging adjacent u and v)
+      let u_center = 0.5 * ( u[i + j*(Nx+1)] + u[(i+1) + j*(Nx+1)] );
+      let v_center = 0.5 * ( v[i + j*Nx] + v[i + (j+1)*Nx] );
+      let u_north = 0.5 * ( u[i + (j+1)*(Nx+1)] + u[(i+1) + (j+1)*(Nx+1)] );
+      let u_south = 0.5 * ( u[i + (j-1)*(Nx+1)] + u[(i+1) + (j-1)*(Nx+1)] );
+      let v_east = 0.5 * ( v[(i+1) + j*Nx] + v[(i+1) + (j+1)*Nx] );
+      let v_west = 0.5 * ( v[(i-1) + j*Nx] + v[(i-1) + (j+1)*Nx] );
+      let dudy = (u_north - u_south) / (2*dy);
+      let dvdx = (v_east - v_west) / (2*dx);
+      return dvdx - dudy;
+    }
+
+    /******************** Visualization ********************/
+    function drawSimulation() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // UPDATED: Use pressure grid dimensions for visualization
+      const cellSize = canvas.width / Nx; 
+      const domainWidth = Nx * cellSize;
+      const domainHeight = Ny * cellSize;
+      const offsetX = (canvas.width - domainWidth) / 2;
+      const offsetY = (canvas.height - domainHeight) / 2;
+      
+      // Determine min and max field values for color mapping over pressure cells
+      let minVal = Infinity, maxVal = -Infinity;
+      for (let j = 0; j < Ny; j++){
+        for (let i = 0; i < Nx; i++){
+          let idxP = i + j * Nx;
+          let val;
+          if(currentVisualization === "velocity") {
+            // Compute cell-centered velocity by averaging u (left/right) and v (bottom/top)
+            let u_center = 0.5 * ( u[i + j*(Nx+1)] + u[(i+1) + j*(Nx+1)] );
+            let v_center = 0.5 * ( v[i + j*Nx] + v[i + (j+1)*Nx] );
+            val = Math.sqrt(u_center**2 + v_center**2);
+          } else if (currentVisualization === "pressure") {
+            val = p[idxP];
+          } else if (currentVisualization === "vorticity") {
+            val = computeVorticity(i, j);
+          }
+          if(val < minVal) minVal = val;
+          if(val > maxVal) maxVal = val;
+        }
+      }
+      if(maxVal === minVal) maxVal = minVal + 1;
+      
+      // Draw each pressure cell
+      for (let j = 0; j < Ny; j++){
+        for (let i = 0; i < Nx; i++){
+          let idxP = i + j * Nx;
+          let val;
+          if(currentVisualization === "velocity") {
+            let u_center = 0.5 * ( u[i + j*(Nx+1)] + u[(i+1) + j*(Nx+1)] );
+            let v_center = 0.5 * ( v[i + j*Nx] + v[i + (j+1)*Nx] );
+            val = Math.sqrt(u_center**2 + v_center**2);
+          } else if (currentVisualization === "pressure") {
+            val = p[idxP];
+          } else if (currentVisualization === "vorticity") {
+            val = computeVorticity(i, j);
+          }
+          let normalized = (val - minVal) / (maxVal - minVal);
+          let color = getColorForValue(normalized);
+          let cellX = offsetX + i * cellSize;
+          let cellY = offsetY + (Ny - 1 - j) * cellSize;
+          ctx.fillStyle = color;
+          ctx.fillRect(cellX, cellY, cellSize, cellSize);
+        }
+      }
+      
+      drawDomainBoundaries(cellSize, offsetX, offsetY);
+      // Draw cylindrical obstacle on top (using pressure cell coordinates)
+      let iCylinder = cylinderCenterX / dx;
+      let jCylinder = cylinderCenterY / dy;
+      let cx = offsetX + (iCylinder - 0.5)*cellSize;
+      let cy = offsetY + (Ny - jCylinder - 0.5)*cellSize;
+      let cr = (cylinderRadius/dx)*cellSize;
+      ctx.beginPath();
+      ctx.arc(cx, cy, cr, 0, 2 * Math.PI);
+      ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+      ctx.fill();
+      ctx.strokeStyle = "white";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    // Map a normalized value (0 to 1) to a color (blue for low, red for high)
+    function getColorForValue(value) {
+      let r = Math.floor(255 * value);
+      let g = 0;
+      let b = Math.floor(255 * (1 - value));
+      return "rgb(" + r + "," + g + "," + b + ")";
+    }
+
+    // Draw the simulation domain boundaries using the new uniform grid mapping.
+    function drawDomainBoundaries(cellSize, offsetX, offsetY) {
+      const domainWidth = Nx * cellSize;
+      const domainHeight = Ny * cellSize;
+      
+      ctx.lineWidth = 3;
+      
+      // Inlet (left boundary in green)
+      ctx.strokeStyle = "green";
+      ctx.beginPath();
+      ctx.moveTo(offsetX, offsetY);
+      ctx.lineTo(offsetX, offsetY + domainHeight);
+      ctx.stroke();
+      
+      // Outlet (right boundary in blue)
+      ctx.strokeStyle = "blue";
+      ctx.beginPath();
+      ctx.moveTo(offsetX + domainWidth, offsetY);
+      ctx.lineTo(offsetX + domainWidth, offsetY + domainHeight);
+      ctx.stroke();
+      
+      // Top and bottom walls (magenta)
+      ctx.strokeStyle = "magenta";
+      ctx.beginPath();
+      ctx.moveTo(offsetX, offsetY);
+      ctx.lineTo(offsetX + domainWidth, offsetY);
+      ctx.stroke();
+      
+      ctx.beginPath();
+      ctx.moveTo(offsetX, offsetY + domainHeight);
+      ctx.lineTo(offsetX + domainWidth, offsetY + domainHeight);
+      ctx.stroke();
+    }
+
+    // Plot the residual history on the residual graph canvas
+    function drawResidualGraph() {
+      residualCtx.clearRect(0, 0, residualCanvas.width, residualCanvas.height);
+      // Draw graph axes
+      residualCtx.strokeStyle = "black";
+      residualCtx.beginPath();
+      residualCtx.moveTo(40, 10);
+      residualCtx.lineTo(40, residualCanvas.height - 30);
+      residualCtx.lineTo(residualCanvas.width - 10, residualCanvas.height - 30);
+      residualCtx.stroke();
+      // Y-axis ticks (10 ticks)
+      for(let i = 0; i <= 10; i++) {
+        let y = 10 + i * ((residualCanvas.height - 40) / 10);
+        residualCtx.beginPath();
+        residualCtx.moveTo(35, y);
+        residualCtx.lineTo(40, y);
+        residualCtx.stroke();
+        residualCtx.fillText(((10 - i) / 10).toFixed(1), 5, y+3);
+      }
+      
+      // Plot residual history as a red line
+      if(residualHistory.length < 2) return;
+      residualCtx.strokeStyle = "red";
+      residualCtx.beginPath();
+      let maxStep = residualHistory[residualHistory.length - 1].step;
+      let maxResidualValue = Math.max(...residualHistory.map(r => r.residual)) || 1;
+      for(let i = 0; i < residualHistory.length; i++) {
+        let x = 40 + (residualHistory[i].step / maxStep) * (residualCanvas.width - 50);
+        let y = 10 + (1 - (residualHistory[i].residual / maxResidualValue)) * (residualCanvas.height - 40);
+        if(i === 0) {
+          residualCtx.moveTo(x,y);
+        } else {
+          residualCtx.lineTo(x,y);
+        }
+      }
+      residualCtx.stroke();
+    }
+
+    /******************** Animation Loop ********************/
+    function simulationLoop() {
+      if(!simulationRunning) return;
+      updateSimulation();
+      drawSimulation();
+      drawResidualGraph();
+      requestAnimationFrame(simulationLoop);
+    }
+
+    /******************** Event Listeners ********************/
+    velocityButton.addEventListener("click", function() {
+      currentVisualization = "velocity";
+      drawSimulation();
+      drawLegend();
+    });
+    pressureButton.addEventListener("click", function() {
+      currentVisualization = "pressure";
+      drawSimulation();
+      drawLegend();
+    });
+    vorticityButton.addEventListener("click", function() {
+      currentVisualization = "vorticity";
+      drawSimulation();
+      drawLegend();
+    });
+    inletVelocitySlider.addEventListener("input", function() {
+      targetInletVelocity = parseFloat(inletVelocitySlider.value);
+      inletVelocityValue.textContent = inletVelocitySlider.value;
+    });
+    timeStepInput.addEventListener("change", function() {
+      dt = parseFloat(timeStepInput.value);
+    });
+    startButton.addEventListener("click", function() {
+      if(!simulationRunning) {
+        simulationRunning = true;
+        simulationLoop();
+      }
+    });
+    pauseButton.addEventListener("click", function() {
+      simulationRunning = false;
+    });
+    resetButton.addEventListener("click", function() {
+      simulationRunning = false;
+      initSimulation();
+    });
+    viscosityInput.addEventListener("input", function() {
+      nu = parseFloat(viscosityInput.value);
+    });
+
+    // Initialize simulation when page loads
+    window.onload = function() {
+      initSimulation();
+    }
+
+    /******************** Automatic Time Step Control (CFL Condition) ********************/
+    function computeAutomaticTimeStep() {
+      let maxVel = 0;
+      // Check maximum velocity in u array
+      for (let i = 0; i < u.length; i++){
+        let vel = Math.abs(u[i]);
+        if (vel > maxVel) maxVel = vel;
+      }
+      // Check maximum velocity in v array
+      for (let i = 0; i < v.length; i++){
+        let vel = Math.abs(v[i]);
+        if (vel > maxVel) maxVel = vel;
+      }
+      if (maxVel === 0) {
+        return parseFloat(timeStepInput.value);
+      }
+      const cfl = 0.5;
+      let dt_cfl = cfl * Math.min(dx, dy) / maxVel;
+      // Cap dt_cfl to the user-selected dt value
+      let dt_user = parseFloat(timeStepInput.value);
+      return Math.min(dt_cfl, dt_user);
+    }
+  </script>
+</body>
+</html>
