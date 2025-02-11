@@ -53,6 +53,12 @@
         <option value="uniform">Uniform</option>
         <option value="parabolic">Parabolic</option>
       </select>
+      <h2>Velocity Discretization Scheme</h2>
+      <label for="velocitySchemeSelect">Scheme:</label>
+      <select id="velocitySchemeSelect">
+        <option value="first" selected>First-Order Upwind</option>
+        <option value="second">Second-Order Upwind</option>
+      </select>
       <h2>Time Step Control</h2>
       <label for="timeStepInput">Time Step (s):</label>
       <input type="number" id="timeStepInput" step="0.001" value="0.5">
@@ -134,6 +140,8 @@
     // NEW: Pressure solver UI element and selection state
     const pressureSolverSelect = document.getElementById("pressureSolverSelect");
     let currentPressureSolver = pressureSolverSelect.value;
+    const velocitySchemeSelect = document.getElementById("velocitySchemeSelect");
+    let currentVelocityScheme = velocitySchemeSelect.value;  // "first" by default
 
     // Simulation state variables
     let simulationRunning = false;
@@ -334,20 +342,66 @@
           }
           let idx_e = (i+1) + j * (Nx+1);
           let idx_w = (i-1) + j * (Nx+1);
+
+          // --- UPDATED: Compute du_dx using selected upwind scheme ---
           let du_dx;
-          if(u[idx] >= 0) {
-              du_dx = (u[idx] - u[idx_w]) / dx;
+          if (currentVelocityScheme === "second") {
+            if(u[idx] >= 0) {
+              if(i > 1) {
+                let idx_ww = (i-2) + j*(Nx+1);
+                du_dx = (3*u[idx] - 4*u[idx_w] + u[idx_ww]) / (2*dx);
+              } else {
+                // Less than two points available: fall back to first order
+                du_dx = (u[idx] - u[idx_w]) / dx;
+              }
+            } else {
+              if(i <= Nx-3) {
+                let idx_ee = (i+2) + j*(Nx+1);
+                du_dx = (-u[idx_ee] + 4*u[idx_e] - 3*u[idx]) / (2*dx);
+              } else {
+                // Fall back to first order near the boundary
+                du_dx = (u[idx_e] - u[idx]) / dx;
+              }
+            }
           } else {
+            // First-order upwind (original implementation)
+            if(u[idx] >= 0) {
+              du_dx = (u[idx] - u[idx_w]) / dx;
+            } else {
               du_dx = (u[idx_e] - u[idx]) / dx;
+            }
           }
+
           let v_avg = ( v[(i-1) + j * Nx] + v[i + j * Nx] +
                         v[(i-1) + (j+1) * Nx] + v[i + (j+1) * Nx] ) / 4;
+          
+          // --- UPDATED: Compute du_dy using selected upwind scheme ---
           let du_dy;
-          if(v_avg >= 0) {
-              du_dy = (u[idx] - u[i + (j-1)*(Nx+1)]) / dy;
+          if (currentVelocityScheme === "second") {
+            if(v_avg >= 0) {
+              if(j > 1) {
+                let idx_s2 = i + (j-2)*(Nx+1);
+                du_dy = (3*u[idx] - 4*u[i + (j-1)*(Nx+1)] + u[idx_s2]) / (2*dy);
+              } else {
+                du_dy = (u[idx] - u[i + (j-1)*(Nx+1)]) / dy;
+              }
+            } else {
+              if(j <= Ny-3) {
+                let idx_n2 = i + (j+2)*(Nx+1);
+                du_dy = (-u[idx_n2] + 4*u[i + (j+1)*(Nx+1)] - 3*u[idx]) / (2*dy);
+              } else {
+                du_dy = (u[i + (j+1)*(Nx+1)] - u[idx]) / dy;
+              }
+            }
           } else {
+            if(v_avg >= 0) {
+              du_dy = (u[idx] - u[i + (j-1)*(Nx+1)]) / dy;
+            } else {
               du_dy = (u[i + (j+1)*(Nx+1)] - u[idx]) / dy;
+            }
           }
+
+          let idx_e_value = u[idx_e]; // used in laplacian (unchanged)
           let lap_u = (u[idx_e] - 2*u[idx] + u[idx_w])/(dx*dx)
                       + (u[i + (j+1)*(Nx+1)] - 2*u[idx] + u[i + (j-1)*(Nx+1)])/(dy*dy);
           uStar[idx] = u[idx] + dt_sub * ( - (u[idx]*du_dx + v_avg*du_dy) + nu * lap_u );
@@ -366,19 +420,61 @@
           }
           let idx_n = i + (j+1) * Nx;
           let idx_s = i + (j-1) * Nx;
+
+          // --- UPDATED: Compute dv_dy using selected upwind scheme ---
           let dv_dy;
-          if(v[idx] >= 0) {
+          if (currentVelocityScheme === "second") {
+            if(v[idx] >= 0) {
+              if(j > 1) {
+                let idx_s2 = i + (j-2)*Nx;
+                dv_dy = (3*v[idx] - 4*v[i + (j-1)*Nx] + v[idx_s2]) / (2*dy);
+              } else {
+                dv_dy = (v[idx] - v[i + (j-1)*Nx]) / dy;
+              }
+            } else {
+              if(j <= Ny-2) {
+                let idx_n2 = i + (j+2)*Nx;
+                dv_dy = (-v[idx_n2] + 4*v[i + (j+1)*Nx] - 3*v[idx]) / (2*dy);
+              } else {
+                dv_dy = (v[i + (j+1)*Nx] - v[idx]) / dy;
+              }
+            }
+          } else {
+            if(v[idx] >= 0) {
               dv_dy = (v[idx] - v[i + (j-1)*Nx]) / dy;
-          } else {
-              dv_dy = (v[idx_n] - v[idx]) / dy;
+            } else {
+              dv_dy = (v[i + (j+1)*Nx] - v[idx]) / dy;
+            }
           }
+
           let u_avg = ( u[(i+1) + j*(Nx+1)] + u[i + j*(Nx+1)] ) / 2;
+          
+          // --- UPDATED: Compute dv_dx using selected upwind scheme ---
           let dv_dx;
-          if(u_avg >= 0) {
-              dv_dx = (v[idx] - v[(i-1) + j * Nx]) / dx;
+          if (currentVelocityScheme === "second") {
+            if(u_avg >= 0) {
+              if(i > 1) {
+                let idx_w2 = (i-2) + j*Nx;
+                dv_dx = (3*v[idx] - 4*v[(i-1) + j*Nx] + v[idx_w2])/(2*dx);
+              } else {
+                dv_dx = (v[idx] - v[(i-1) + j*Nx]) / dx;
+              }
+            } else {
+              if(i <= Nx-3) {
+                let idx_e2 = (i+2) + j*Nx;
+                dv_dx = (-v[idx_e2] + 4*v[(i+1) + j*Nx] - 3*v[idx])/(2*dx);
+              } else {
+                dv_dx = (v[(i+1) + j*Nx] - v[idx]) / dx;
+              }
+            }
           } else {
-              dv_dx = (v[(i+1) + j * Nx] - v[idx]) / dx;
+            if(u_avg >= 0) {
+              dv_dx = (v[idx] - v[(i-1) + j*Nx]) / dx;
+            } else {
+              dv_dx = (v[(i+1) + j*Nx] - v[idx]) / dx;
+            }
           }
+          
           let lap_v = (v[(i+1) + j * Nx] - 2*v[idx] + v[(i-1) + j * Nx])/(dx*dx)
                       + (v[idx_n] - 2*v[idx] + v[idx_s])/(dy*dy);
           vStar[idx] = v[idx] + dt_sub * ( - (u_avg * dv_dx + v[idx]*dv_dy) + nu * lap_v );
@@ -844,6 +940,11 @@
     const residualScalingCheckbox = document.getElementById("residualScalingCheckbox");
     residualScalingCheckbox.addEventListener("change", function() {
       residualScalingEnabled = residualScalingCheckbox.checked;
+    });
+
+    // Event listener to update the scheme variable when the user selects a different option
+    velocitySchemeSelect.addEventListener("change", function() {
+      currentVelocityScheme = velocitySchemeSelect.value;
     });
 
     // Initialize simulation when page loads
