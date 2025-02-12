@@ -10,6 +10,12 @@ pub struct App {
     simulation_running: Arc<AtomicBool>,
     simulation_state: Arc<Mutex<SimulationState>>,
     simulation_params: Arc<Mutex<SimulationParams>>,
+    // --- New fields for logging ---
+    log: Vec<String>,              // stores all log messages
+    last_logged_step: usize,       // last simulation step for which a message was logged
+    should_autoscroll: bool,       // trigger to autoscroll the log view
+    // --- New field for visualization mode ---
+    vis_mode: VisualizationMode,
 }
 
 /// New helper structure to hold the simulation state.
@@ -70,6 +76,12 @@ impl Default for App {
                 simulation_time: 0.0,
             })),
             simulation_params: Arc::new(Mutex::new(SimulationParams::default())),
+            // --- New initializations ---
+            log: Vec::new(),              // stores all log messages
+            last_logged_step: 0,       // last simulation step for which a message was logged
+            should_autoscroll: false,       // trigger to autoscroll the log view
+            // --- New field for visualization mode ---
+            vis_mode: VisualizationMode::Pressure,
         }
     }
 }
@@ -144,6 +156,11 @@ impl eframe::App for App {
                     state.model = Model::new(grid);
                     state.simulation_time = 0.0;
                     self.simulation_running.store(false, Ordering::Relaxed);
+
+                    // --- New: Clear the log and reset the simulation step tracker ---
+                    self.log.clear();
+                    self.last_logged_step = 0;
+                    self.should_autoscroll = false;
                 }
                 ui.label("Simulation Parameters");
                 {
@@ -177,6 +194,19 @@ impl eframe::App for App {
 
         // --- CENTRAL PANEL: Visualization ---
         egui::CentralPanel::default().show(ctx, |ui| {
+            // --- Mode Selector: Buttons above the visualization ---
+            ui.horizontal(|ui| {
+                if ui.selectable_label(self.vis_mode == VisualizationMode::Pressure, "Pressure").clicked() {
+                    self.vis_mode = VisualizationMode::Pressure;
+                }
+                if ui.selectable_label(self.vis_mode == VisualizationMode::Velocity, "Velocity").clicked() {
+                    self.vis_mode = VisualizationMode::Velocity;
+                }
+                if ui.selectable_label(self.vis_mode == VisualizationMode::Vorticity, "Vorticity").clicked() {
+                    self.vis_mode = VisualizationMode::Vorticity;
+                }
+            });
+
             let state = self.simulation_state.lock().unwrap();
             let grid = &state.model.grid;
             let nx = grid.nx;
@@ -185,35 +215,114 @@ impl eframe::App for App {
                 return;
             }
 
-            // Get the simulation pressure field.
-            let pressure = state.model.get_pressure();
-
-            // Compute min and max pressure for color mapping.
-            let (mut min_p, mut max_p) = (f32::INFINITY, f32::NEG_INFINITY);
-            for &p_val in pressure.iter() {
-                if p_val < min_p { min_p = p_val; }
-                if p_val > max_p { max_p = p_val; }
-            }
-            if (max_p - min_p).abs() < 1e-6 {
-                max_p = min_p + 1.0;
-            }
-
-            // Create a color image from the pressure field, mapping one cell to one pixel.
-            let mut pixels = Vec::with_capacity(nx * ny);
-            for j in 0..ny {
-                for i in 0..nx {
-                    let index = i + j * nx;
-                    let val = pressure[index];
-                    let norm = (val - min_p) / (max_p - min_p);
-                    let r = (norm * 255.0) as u8;
-                    let b = (((1.0 - norm) * 255.0)) as u8;
-                    pixels.push(egui::Color32::from_rgb(r, 0, b));
+            let image = match self.vis_mode {
+                VisualizationMode::Pressure => {
+                    // Pressure visualization.
+                    let pressure = state.model.get_pressure();
+                    let (mut min_val, mut max_val) = (f32::INFINITY, f32::NEG_INFINITY);
+                    for &p in pressure.iter() {
+                        if p < min_val { min_val = p; }
+                        if p > max_val { max_val = p; }
+                    }
+                    if (max_val - min_val).abs() < 1e-6 {
+                        max_val = min_val + 1.0;
+                    }
+                    let mut pixels = Vec::with_capacity(nx * ny);
+                    for j in 0..ny {
+                        for i in 0..nx {
+                            let index = i + j * nx;
+                            let val = pressure[index];
+                            let norm = (val - min_val) / (max_val - min_val);
+                            let r = (norm * 255.0) as u8;
+                            let b = (((1.0 - norm) * 255.0)) as u8;
+                            pixels.push(egui::Color32::from_rgb(r, 0, b));
+                        }
+                    }
+                    egui::ColorImage {
+                        size: [nx, ny],
+                        pixels,
+                    }
                 }
-            }
-
-            let image = egui::ColorImage {
-                size: [nx, ny],
-                pixels,
+                VisualizationMode::Velocity => {
+                    // Velocity magnitude visualization.
+                    let u = state.model.get_u();
+                    let v = state.model.get_v();
+                    let nx_plus_one = grid.nx + 1;
+                    let mut mags = Vec::with_capacity(nx * ny);
+                    let mut min_val = f32::INFINITY;
+                    let mut max_val = f32::NEG_INFINITY;
+                    for j in 0..ny {
+                        for i in 0..nx {
+                            let u_left = u[i + j * nx_plus_one];
+                            let u_right = u[i + 1 + j * nx_plus_one];
+                            let u_cell = 0.5 * (u_left + u_right);
+                            let v_bottom = v[i + j * grid.nx];
+                            let v_top = v[i + (j + 1) * grid.nx];
+                            let v_cell = 0.5 * (v_bottom + v_top);
+                            let mag = (u_cell * u_cell + v_cell * v_cell).sqrt();
+                            if mag < min_val { min_val = mag; }
+                            if mag > max_val { max_val = mag; }
+                            mags.push(mag);
+                        }
+                    }
+                    if (max_val - min_val).abs() < 1e-6 {
+                        max_val = min_val + 1.0;
+                    }
+                    let pixels: Vec<egui::Color32> = mags
+                        .iter()
+                        .map(|&mag| {
+                            let norm = (mag - min_val) / (max_val - min_val);
+                            let r = (norm * 255.0) as u8;
+                            let b = (((1.0 - norm) * 255.0)) as u8;
+                            egui::Color32::from_rgb(r, 0, b)
+                        })
+                        .collect();
+                    egui::ColorImage {
+                        size: [nx, ny],
+                        pixels,
+                    }
+                }
+                VisualizationMode::Vorticity => {
+                    // Vorticity visualization.
+                    let u = state.model.get_u();
+                    let v = state.model.get_v();
+                    let nx_plus_one = grid.nx + 1;
+                    let mut vort = vec![0.0; nx * ny];
+                    // Compute vorticity for interior cells using central differences.
+                    for j in 1..(ny - 1) {
+                        for i in 1..(nx - 1) {
+                            let u_bottom = 0.5 * (u[i + j * nx_plus_one] + u[i + 1 + j * nx_plus_one]);
+                            let u_top = 0.5 * (u[i + (j + 1) * nx_plus_one] + u[i + 1 + (j + 1) * nx_plus_one]);
+                            let du_dy = (u_top - u_bottom) / grid.dy;
+                            let v_left = 0.5 * (v[i + j * grid.nx] + v[i + (j + 1) * grid.nx]);
+                            let v_right = 0.5 * (v[i + 1 + j * grid.nx] + v[i + 1 + (j + 1) * grid.nx]);
+                            let dv_dx = (v_right - v_left) / grid.dx;
+                            vort[i + j * nx] = dv_dx - du_dy;
+                        }
+                    }
+                    let mut min_val = f32::INFINITY;
+                    let mut max_val = f32::NEG_INFINITY;
+                    for &w in vort.iter() {
+                        if w < min_val { min_val = w; }
+                        if w > max_val { max_val = w; }
+                    }
+                    if (max_val - min_val).abs() < 1e-6 {
+                        max_val = min_val + 1.0;
+                    }
+                    let pixels: Vec<egui::Color32> = vort
+                        .into_iter()
+                        .map(|w| {
+                            let norm = (w - min_val) / (max_val - min_val);
+                            let r = (norm * 255.0) as u8;
+                            let b = (((1.0 - norm) * 255.0)) as u8;
+                            egui::Color32::from_rgb(r, 0, b)
+                        })
+                        .collect();
+                    egui::ColorImage {
+                        size: [nx, ny],
+                        pixels,
+                    }
+                }
             };
 
             // Load the texture from the image. Using "Nearest" filtering preserves cell sharpness.
@@ -228,33 +337,66 @@ impl eframe::App for App {
                 },
             );
 
-            // Display the texture as an image that stretches to the available space.
-            let available = ui.available_rect_before_wrap();
-            ui.image((texture.id(), available.size()));
+            // Display the texture while maintaining the aspect ratio of the simulation domain.
+            let available_size = ui.available_rect_before_wrap().size();
+            let domain_aspect = grid.lx / grid.ly;
+            let available_aspect = available_size.x / available_size.y;
+            let (img_width, img_height) = if available_aspect > domain_aspect {
+                (available_size.y * domain_aspect, available_size.y)
+            } else {
+                (available_size.x, available_size.x / domain_aspect)
+            };
+            let img_size = egui::Vec2::new(img_width, img_height);
+            ui.image((texture.id(), img_size));
         });
 
+        // --- New: Update log history if a new simulation step occurred ---
+        {
+            let state = self.simulation_state.lock().unwrap();
+            let current_step = state.model.simulation_step;
+            if current_step > self.last_logged_step {
+                let new_message = format!(
+                    "Step: {}, Time: {:.3} s, dt: {:.3} s, Residual: {:.3e}",
+                    state.model.simulation_step,
+                    state.simulation_time,
+                    self.simulation_params.lock().unwrap().dt,
+                    state.model.get_last_pressure_residual(),
+                );
+                self.log.push(new_message);
+                self.last_logged_step = current_step;
+                self.should_autoscroll = true;
+            }
+        }
+
+        // --- BOTTOM PANEL: Log Display with Autoscroll ---
         egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
             ui.separator();
-            let state = self.simulation_state.lock().unwrap();
-            let simulation_time = state.simulation_time;
-            let log_text = format!(
-                "Step: {}, Time: {:.3} s, dt: {:.3} s, Residual: {:.3e}",
-                state.model.simulation_step,
-                simulation_time,
-                self.simulation_params.lock().unwrap().dt,
-                state.model.get_last_pressure_residual(),
-            );
             egui::ScrollArea::vertical()
                 .min_scrolled_height(200.0)
                 .show(ui, |ui| {
-                    ui.label(log_text);
+                    for message in &self.log {
+                        ui.label(message);
+                    }
+                    // Autoscroll to the bottom if new message was added.
+                    if self.should_autoscroll {
+                        ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
+                    }
                 });
         });
+        // Reset autoscroll flag after rendering the log.
+        self.should_autoscroll = false;
 
         // Request a repaint if the simulation is running so that the UI updates continuously.
         if self.simulation_running.load(Ordering::Relaxed) {
             ctx.request_repaint();
         }
     }
+}
+
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum VisualizationMode {
+    Pressure,
+    Velocity,
+    Vorticity,
 }
 
