@@ -20,6 +20,8 @@ pub struct App {
     vis_mode: VisualizationMode,
     // --- New field for managing the simulation thread ---
     simulation_handle: Option<thread::JoinHandle<()>>,
+    // --- New field for pause/resume ---
+    simulation_paused: Arc<AtomicBool>,  // added new paused flag
 }
 
 /// New helper structure to hold the simulation state.
@@ -105,6 +107,8 @@ impl Default for App {
             // --- New field for visualization mode ---
             vis_mode: VisualizationMode::Pressure,
             simulation_handle: None,
+            // --- New field for pause/resume ---
+            simulation_paused: Arc::new(AtomicBool::new(false)),  // initialize paused flag
         }
     }
 }
@@ -155,6 +159,7 @@ impl eframe::App for App {
                 if ui.button("Start").clicked() {
                     if self.simulation_handle.is_none() {
                         self.simulation_running.store(true, Ordering::Relaxed);
+                        self.simulation_paused.store(false, Ordering::Relaxed); // ensure not paused on start
                         // Create channels for requests and responses.
                         let (req_tx, req_rx) = std::sync::mpsc::channel::<()>();
                         let (res_tx, res_rx) = std::sync::mpsc::channel::<SimSnapshot>();
@@ -162,6 +167,7 @@ impl eframe::App for App {
                         self.simulation_res_rx = Some(res_rx);
                         let simulation_params = Arc::clone(&self.simulation_params);
                         let simulation_running = Arc::clone(&self.simulation_running);
+                        let simulation_paused = Arc::clone(&self.simulation_paused); // pass the new flag
                         self.simulation_handle = Some(thread::spawn(move || {
                             // Create a local simulation state.
                             let mut sim_state = SimulationState {
@@ -182,11 +188,11 @@ impl eframe::App for App {
                                         params.pressure_solver,
                                     )
                                 };
-                                // When a UI request is pending, send a copy of the simulation snapshot.
+                                // Process any UI requests.
                                 while let Ok(()) = req_rx.try_recv() {
                                     let _ = res_tx.send(sim_state.snapshot());
                                 }
-                                {
+                                if !simulation_paused.load(Ordering::Relaxed) {
                                     // Update simulation state using the copied parameters.
                                     sim_state.model.set_dt(dt);
                                     sim_state.model.set_viscosity(viscosity);
@@ -196,19 +202,29 @@ impl eframe::App for App {
                                     sim_state.model.set_pressure_solver(pressure_solver);
                                     sim_state.model.update();
                                     sim_state.simulation_time += dt;
+                                    println!("Time taken: {:?}", start_time.elapsed());
+                                } else {
+                                    // When paused, sleep a bit to avoid a busy loop.
+                                    std::thread::sleep(Duration::from_millis(50));
                                 }
-                                println!("Time taken: {:?}", start_time.elapsed());
                                 std::thread::yield_now();
                             }
                         }));
                     }
                 }
 
-                // --- PAUSE BUTTON ---
-                if ui.button("Pause").clicked() {
-                    self.simulation_running.store(false, Ordering::Relaxed);
-                    if let Some(handle) = self.simulation_handle.take() {
-                        handle.join().unwrap();
+                // --- PAUSE / RESUME BUTTON ---
+                if self.simulation_handle.is_some() {
+                    if self.simulation_paused.load(Ordering::Relaxed) {
+                        // Currently paused; show "Resume" button.
+                        if ui.button("Resume").clicked() {
+                            self.simulation_paused.store(false, Ordering::Relaxed);
+                        }
+                    } else {
+                        // Currently running; show "Pause" button.
+                        if ui.button("Pause").clicked() {
+                            self.simulation_paused.store(true, Ordering::Relaxed);
+                        }
                     }
                 }
 
