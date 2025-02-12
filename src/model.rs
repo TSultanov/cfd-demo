@@ -693,13 +693,14 @@ impl Model {
         let denom = 2.0 / (dx * dx) + 2.0 / (dy * dy);
         match self.pressure_solver {
             PressureSolver::SOR => {
-                // For brevity, a SOR solver is implemented similarly here.
+                // SOR solver implementation.
                 self.p_prime.fill(0.0);
                 let sor_omega = 1.7;
                 let pressure_tolerance = 1e-4;
                 let iterations = 50;
+                let mut max_error = 0.0;
                 for _ in 0..iterations {
-                    let mut max_error = 0.0;
+                    max_error = 0.0;
                     for j in 1..(ny - 1) {
                         for i in 1..(nx - 1) {
                             let idx = i + j * nx;
@@ -729,7 +730,7 @@ impl Model {
                         break;
                     }
                 }
-                self.last_pressure_residual = 0.0; // (optionally, compute the maximum residual)
+                self.last_pressure_residual = max_error;
             }
             PressureSolver::Multigrid => {
                 // Multigrid solver can be implemented here.
@@ -737,7 +738,8 @@ impl Model {
                 self.jacobi_pressure(denom, dx, dy, nx, ny);
             }
             PressureSolver::Jacobi => {
-                self.jacobi_pressure(denom, dx, dy, nx, ny);
+                let residual = self.jacobi_pressure(denom, dx, dy, nx, ny);
+                self.last_pressure_residual = residual;
             }
         }
 
@@ -770,11 +772,12 @@ impl Model {
     }
 
     /// A helper for the Jacobi pressure correction solver.
-    fn jacobi_pressure(&mut self, denom: f32, dx: f32, dy: f32, nx: usize, ny: usize) {
+    fn jacobi_pressure(&mut self, denom: f32, dx: f32, dy: f32, nx: usize, ny: usize) -> f32 {
         self.p_prime.fill(0.0);
         let jacobi_omega = 0.7;
         let pressure_tolerance = 1e-6;
         let iterations = 50;
+        let mut max_error = 0.0;
         for _iter in 0..iterations {
             self.p_prime_new.fill(0.0);
             for j in 1..(ny - 1) {
@@ -789,7 +792,7 @@ impl Model {
                         jacobi_omega * p_update + (1.0 - jacobi_omega) * self.p_prime[idx];
                 }
             }
-            let mut max_error = 0.0;
+            max_error = 0.0;
             for j in 1..(ny - 1) {
                 for i in 1..(nx - 1) {
                     let idx = i + j * nx;
@@ -812,7 +815,8 @@ impl Model {
                 break;
             }
         }
-        self.last_pressure_residual = 0.0; // Optionally, store max_error here.
+        self.last_pressure_residual = max_error;
+        max_error
     }
 
     /// Enforce boundary conditions on the velocity fields.

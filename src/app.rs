@@ -118,6 +118,38 @@ impl App {
 
         app
     }
+
+    /// Resets the simulation by reinitializing the model, simulation time, and resetting logs.
+    fn reset_simulation(&mut self) {
+         let nx = 400;
+         let ny = 132;
+         let lx = 30.0;
+         let ly = 10.0;
+         let dx = lx / nx as f32;
+         let dy = ly / ny as f32;
+         let grid = Grid {
+             nx,
+             ny,
+             lx,
+             ly,
+             dx,
+             dy,
+             obstacle: Some(Cylinder {
+                 center_x: lx / 4.0,
+                 center_y: ly / 2.0,
+                 radius: 0.75,
+             }),
+         };
+         let mut state = self.simulation_state.lock().unwrap();
+         state.model = Model::new(grid);
+         state.simulation_time = 0.0;
+         self.simulation_running.store(false, Ordering::Relaxed);
+         
+         // Clear the log and reset tracking
+         self.log.clear();
+         self.last_logged_step = 0;
+         self.should_autoscroll = false;
+    }
 }
 
 impl eframe::App for App {
@@ -132,35 +164,7 @@ impl eframe::App for App {
                     self.simulation_running.store(false, Ordering::Relaxed);
                 }
                 if ui.button("Reset").clicked() {
-                    // Reinitialize the simulation model and simulation time:
-                    let nx = 400;
-                    let ny = 132;
-                    let lx = 30.0;
-                    let ly = 10.0;
-                    let dx = lx / nx as f32;
-                    let dy = ly / ny as f32;
-                    let grid = Grid {
-                        nx,
-                        ny,
-                        lx,
-                        ly,
-                        dx,
-                        dy,
-                        obstacle: Some(Cylinder {
-                            center_x: lx / 4.0,
-                            center_y: ly / 2.0,
-                            radius: 0.75,
-                        }),
-                    };
-                    let mut state = self.simulation_state.lock().unwrap();
-                    state.model = Model::new(grid);
-                    state.simulation_time = 0.0;
-                    self.simulation_running.store(false, Ordering::Relaxed);
-
-                    // --- New: Clear the log and reset the simulation step tracker ---
-                    self.log.clear();
-                    self.last_logged_step = 0;
-                    self.should_autoscroll = false;
+                    self.reset_simulation();
                 }
                 ui.label("Simulation Parameters");
                 {
@@ -359,7 +363,7 @@ impl eframe::App for App {
                     "Step: {}, Time: {:.3} s, dt: {:.3} s, Residual: {:.3e}",
                     state.model.simulation_step,
                     state.simulation_time,
-                    self.simulation_params.lock().unwrap().dt,
+                    state.model.dt,
                     state.model.get_last_pressure_residual(),
                 );
                 self.log.push(new_message);
@@ -385,6 +389,16 @@ impl eframe::App for App {
         });
         // Reset autoscroll flag after rendering the log.
         self.should_autoscroll = false;
+
+        // Propagate automatic dt updates from the model to the simulation parameters,
+        // so that the UI slider and the log display the current dt.
+        {
+            let state = self.simulation_state.lock().unwrap();
+            let new_dt = state.model.dt;
+            drop(state);
+            let mut params = self.simulation_params.lock().unwrap();
+            params.dt = new_dt;
+        }
 
         // Request a repaint if the simulation is running so that the UI updates continuously.
         if self.simulation_running.load(Ordering::Relaxed) {
