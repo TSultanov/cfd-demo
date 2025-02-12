@@ -174,11 +174,12 @@ impl Model {
     pub fn update(&mut self) {
         // Extrapolate previous velocities if not at the very first step.
         if self.simulation_step > 0 {
+            let relaxation_factor = 0.5;
             for i in 0..self.u.len() {
-                self.u[i] = 2.0 * self.u[i] - self.u_prev[i];
+                self.u[i] = (1.0 + relaxation_factor) * self.u[i] - relaxation_factor * self.u_prev[i];
             }
             for i in 0..self.v.len() {
-                self.v[i] = 2.0 * self.v[i] - self.v_prev[i];
+                self.v[i] = (1.0 + relaxation_factor) * self.v[i] - relaxation_factor * self.v_prev[i];
             }
         }
 
