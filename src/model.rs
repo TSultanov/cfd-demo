@@ -288,200 +288,26 @@ impl Model {
                     self.u_star[idx] = 0.0;
                     continue;
                 }
-                match self.velocity_scheme {
-                    VelocityScheme::FirstOrder => {
-                        // East face
-                        let idx_e = idx + 1;
-                        let u_avg_e = 0.5 * (self.u[idx] + self.u[idx_e]);
-                        let u_face_e = if u_avg_e >= 0.0 {
-                            self.u[idx]
-                        } else {
-                            self.u[idx_e]
-                        };
-                        let f_e = u_face_e * u_face_e;
-                        // West face
-                        let idx_w = idx - 1;
-                        let u_avg_w = 0.5 * (self.u[idx_w] + self.u[idx]);
-                        let u_face_w = if u_avg_w >= 0.0 {
-                            self.u[idx_w]
-                        } else {
-                            self.u[idx]
-                        };
-                        let f_w = u_face_w * u_face_w;
-                        // North face (need to index u in the (nx+1) grid and v appropriately)
-                        let idx_n = i + (j + 1) * (nx + 1);
-                        let u_north = self.u[idx_n];
-                        let idx_v_nw = if i > 0 { (i - 1) + (j + 1) * nx } else { 0 };
-                        let idx_v_n = i + (j + 1) * nx;
-                        let v_n = 0.5 * (self.v[idx_v_nw] + self.v[idx_v_n]);
-                        let u_face_n = if v_n >= 0.0 {
-                            self.u[idx]
-                        } else {
-                            u_north
-                        };
-                        let f_n = v_n * u_face_n;
-                        // South face
-                        let idx_s = i + (j - 1) * (nx + 1);
-                        let u_south = self.u[idx_s];
-                        let idx_v_s = if i > 0 { (i - 1) + j * nx } else { 0 };
-                        let idx_v_current = i + j * nx;
-                        let v_s = 0.5 * (self.v[idx_v_s] + self.v[idx_v_current]);
-                        let u_face_s = if v_s >= 0.0 {
-                            u_south
-                        } else {
-                            self.u[idx]
-                        };
-                        let f_s = v_s * u_face_s;
-                        let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
-                        let laplace = (self.u[idx_e] - 2.0 * self.u[idx] + self.u[idx_w]) / (dx * dx)
-                            + (self.u[i + (j + 1) * (nx + 1)] - 2.0 * self.u[idx]
-                                + self.u[i + (j - 1) * (nx + 1)])
-                                / (dy * dy);
-                        self.u_star[idx] = self.u[idx] + dt_sub * (-convective + nu * laplace);
-                    }
-                    VelocityScheme::SecondOrder => {
-                        // Second order upwinding discretization for u.
-                        let idx_e = idx + 1;
-                        let u_face_e = if self.u[idx] >= 0.0 {
-                            if i > 1 {
-                                1.5 * self.u[idx] - 0.5 * self.u[idx - 1]
-                            } else {
-                                self.u[idx]
-                            }
-                        } else if (idx_e + 1) < self.u.len() && i < nx - 1 {
-                            1.5 * self.u[idx_e] - 0.5 * self.u[idx_e + 1]
-                        } else {
-                            self.u[idx_e]
-                        };
-                        let f_e = u_face_e * u_face_e;
-                        let idx_w = idx - 1;
-                        let u_face_w = if self.u[idx_w] >= 0.0 {
-                            if i > 2 {
-                                1.5 * self.u[idx_w] - 0.5 * self.u[idx_w - 1]
-                            } else {
-                                self.u[idx_w]
-                            }
-                        } else {
-                            if i < nx {
-                                1.5 * self.u[idx] - 0.5 * self.u[idx + 1]
-                            } else {
-                                self.u[idx]
-                            }
-                        };
-                        let f_w = u_face_w * u_face_w;
-                        let idx_n = i + (j + 1) * (nx + 1);
-                        let idx_v_nw = if i > 0 { (i - 1) + (j + 1) * nx } else { 0 };
-                        let idx_v_n = i + (j + 1) * nx;
-                        let v_n = 0.5 * (self.v[idx_v_nw] + self.v[idx_v_n]);
-                        let u_face_n = if v_n >= 0.0 {
-                            if j > 1 {
-                                1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)]
-                            } else {
-                                self.u[idx]
-                            }
-                        } else if (i + (j + 2) * (nx + 1)) < self.u.len() && j < ny - 1 {
-                            1.5 * self.u[idx_n] - 0.5 * self.u[i + (j + 2) * (nx + 1)]
-                        } else {
-                            self.u[idx_n]
-                        };
-                        let f_n = v_n * u_face_n;
-                        let idx_s = i + (j - 1) * (nx + 1);
-                        let u_face_s = if v_n >= 0.0 {
-                            if j > 1 {
-                                1.5 * self.u[idx_s] - 0.5 * self.u[i + (j - 2) * (nx + 1)]
-                            } else {
-                                self.u[idx_s]
-                            }
-                        } else if j < ny {
-                            1.5 * self.u[idx] - 0.5 * self.u[i + (j + 1) * (nx + 1)]
-                        } else {
-                            self.u[idx]
-                        };
-                        let f_s = {
-                            let idx_v_s = if i > 0 { (i - 1) + j * nx } else { 0 };
-                            let idx_v_current = i + j * nx;
-                            let v_s = 0.5 * (self.v[idx_v_s] + self.v[idx_v_current]);
-                            v_s * u_face_s
-                        };
-                        let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
-                        let laplace = (self.u[idx_e] - 2.0 * self.u[idx] + self.u[idx_w]) / (dx * dx)
-                            + (self.u[i + (j + 1) * (nx + 1)] - 2.0 * self.u[idx]
-                                + self.u[i + (j - 1) * (nx + 1)])
-                                / (dy * dy);
-                        self.u_star[idx] = self.u[idx] + dt_sub * (-convective + nu * laplace);
-                    }
-                    VelocityScheme::Quick => {
-                        // QUICK discretization for u.
-                        let u_face_e = if self.u[idx] >= 0.0 {
-                            if i >= 2 {
-                                (-self.u[idx - 1] + 6.0 * self.u[idx] + 3.0 * self.u[idx + 1])
-                                    / 8.0
-                            } else {
-                                1.5 * self.u[idx] - 0.5 * self.u[idx - 1]
-                            }
-                        } else if i <= nx - 2 {
-                            (3.0 * self.u[idx] + 6.0 * self.u[idx + 1] - self.u[idx + 2]) / 8.0
-                        } else {
-                            self.u[idx + 1]
-                        };
-                        let f_e = u_face_e * u_face_e;
-                        let u_face_w = if self.u[idx - 1] >= 0.0 {
-                            if i >= 3 {
-                                (-self.u[idx - 2] + 6.0 * self.u[idx - 1] + 3.0 * self.u[idx])
-                                    / 8.0
-                            } else {
-                                1.5 * self.u[idx - 1] - 0.5 * self.u[idx]
-                            }
-                        } else {
-                            (3.0 * self.u[idx - 1] + 6.0 * self.u[idx] - self.u[idx + 1]) / 8.0
-                        };
-                        let f_w = u_face_w * u_face_w;
-                        let idx_n = i + (j + 1) * (nx + 1);
-                        let u_n = self.u[idx_n];
-                        let idx_v_nw = if i > 0 { (i - 1) + (j + 1) * nx } else { 0 };
-                        let idx_v_n = i + (j + 1) * nx;
-                        let v_n = 0.5 * (self.v[idx_v_nw] + self.v[idx_v_n]);
-                        let u_face_n = if v_n >= 0.0 {
-                            if j >= 2 {
-                                (-self.u[i + (j - 1) * (nx + 1)] + 6.0 * self.u[idx] + 3.0 * u_n)
-                                    / 8.0
-                            } else {
-                                1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)]
-                            }
-                        } else if j < ny - 2 {
-                            (3.0 * self.u[idx] + 6.0 * u_n - self.u[i + (j + 2) * (nx + 1)]) / 8.0
-                        } else {
-                            u_n
-                        };
-                        let f_n = v_n * u_face_n;
-                        let idx_s = i + (j - 1) * (nx + 1);
-                        let u_face_s = if v_n >= 0.0 {
-                            if j >= 2 {
-                                (-self.u[i + (j - 2) * (nx + 1)] + 6.0 * self.u[idx_s] + 3.0 * self.u[idx])
-                                    / 8.0
-                            } else {
-                                1.5 * self.u[idx_s] - 0.5 * self.u[idx]
-                            }
-                        } else if j < ny - 1 {
-                            (3.0 * self.u[idx_s] + 6.0 * self.u[idx] - self.u[i + (j + 1) * (nx + 1)])
-                                / 8.0
-                        } else {
-                            self.u[idx]
-                        };
-                        let f_s = {
-                            let idx_v_s = if i > 0 { (i - 1) + j * nx } else { 0 };
-                            let idx_v_current = i + j * nx;
-                            let v_s = 0.5 * (self.v[idx_v_s] + self.v[idx_v_current]);
-                            v_s * u_face_s
-                        };
-                        let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
-                        let laplace = (self.u[idx + 1] - 2.0 * self.u[idx] + self.u[idx - 1]) / (dx * dx)
-                            + (self.u[i + (j + 1) * (nx + 1)] - 2.0 * self.u[idx]
-                                + self.u[i + (j - 1) * (nx + 1)])
-                                / (dy * dy);
-                        self.u_star[idx] = self.u[idx] + dt_sub * (-convective + nu * laplace);
-                    }
-                }
+                // Instead of a match block per scheme, we now use helper functions.
+                let u_e = self.u_face_e(i, j);
+                let u_w = self.u_face_w(i, j);
+                let v_n = self.get_v_north(i, j);
+                let u_n = self.u_face_n(i, j);
+                let v_s = self.get_v_south(i, j);
+                let u_s = self.u_face_s(i, j);
+
+                let f_e = u_e * u_e;
+                let f_w = u_w * u_w;
+                let f_n = v_n * u_n;
+                let f_s = v_s * u_s;
+                let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
+
+                let idx_e = idx + 1;
+                let idx_w = idx - 1;
+                let laplace = (self.u[idx_e] - 2.0 * self.u[idx] + self.u[idx_w]) / (dx * dx)
+                    + (self.u[i + (j + 1) * (nx + 1)] - 2.0 * self.u[idx] + self.u[i + (j - 1) * (nx + 1)])
+                        / (dy * dy);
+                self.u_star[idx] = self.u[idx] + dt_sub * (-convective + nu * laplace);
             }
         }
 
@@ -496,191 +322,19 @@ impl Model {
                     self.v_star[idx] = 0.0;
                     continue;
                 }
-                match self.velocity_scheme {
-                    VelocityScheme::FirstOrder => {
-                        // East face flux
-                        let idx_e = idx + 1;
-                        let u_e = self.u[(i + 1) + j * (nx + 1)];
-                        let v_face_e = if u_e >= 0.0 {
-                            self.v[idx]
-                        } else {
-                            self.v[idx_e]
-                        };
-                        let f_e = u_e * v_face_e;
-                        // West face flux
-                        let idx_w = idx - 1;
-                        let u_w = self.u[i + j * (nx + 1)];
-                        let v_face_w = if u_w >= 0.0 {
-                            self.v[idx_w]
-                        } else {
-                            self.v[idx]
-                        };
-                        let f_w = u_w * v_face_w;
-                        // North face flux
-                        let idx_n = i + (j + 1) * nx;
-                        let v_avg_n = 0.5 * (self.v[idx] + self.v[idx_n]);
-                        let v_face_n = if v_avg_n >= 0.0 {
-                            self.v[idx]
-                        } else {
-                            self.v[idx_n]
-                        };
-                        let f_n = v_face_n * v_face_n;
-                        // South face flux
-                        let idx_s = i + (j - 1) * nx;
-                        let v_avg_s = 0.5 * (self.v[idx_s] + self.v[idx]);
-                        let v_face_s = if v_avg_s >= 0.0 {
-                            self.v[idx_s]
-                        } else {
-                            self.v[idx]
-                        };
-                        let f_s = v_face_s * v_face_s;
-                        let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
-                        let laplace = (self.v[(i + 1) + j * nx] - 2.0 * self.v[idx] + self.v[(i - 1) + j * nx])
-                            / (dx * dx)
-                            + (self.v[i + (j + 1) * nx] - 2.0 * self.v[idx] + self.v[i + (j - 1) * nx])
-                                / (dy * dy);
-                        self.v_star[idx] = self.v[idx] + dt_sub * (-convective + nu * laplace);
-                    }
-                    VelocityScheme::SecondOrder => {
-                        // Second order for v (similar in spirit)
-                        let idx_e = idx + 1;
-                        let u_e = self.u[(i + 1) + j * (nx + 1)];
-                        let v_face_e = if u_e >= 0.0 {
-                            if i > 0 {
-                                1.5 * self.v[idx] - 0.5 * self.v[idx - 1]
-                            } else {
-                                self.v[idx]
-                            }
-                        } else if (idx_e + 1) < self.v.len() && i < nx - 2 {
-                            1.5 * self.v[idx + 1] - 0.5 * self.v[idx + 2]
-                        } else {
-                            self.v[idx + 1]
-                        };
-                        let f_e = u_e * v_face_e;
-                        let idx_w = idx - 1;
-                        let u_w = self.u[i + j * (nx + 1)];
-                        let v_face_w = if u_w >= 0.0 {
-                            if i > 1 {
-                                1.5 * self.v[idx_w] - 0.5 * self.v[idx_w - 1]
-                            } else {
-                                self.v[idx_w]
-                            }
-                        } else if i < nx - 1 {
-                            1.5 * self.v[idx] - 0.5 * self.v[idx + 1]
-                        } else {
-                            self.v[idx]
-                        };
-                        let f_w = u_w * v_face_w;
-                        let idx_n = i + (j + 1) * nx;
-                        let v_face_n = if {
-                            let v_avg = 0.5 * (self.v[idx] + self.v[idx_n]);
-                            v_avg
-                        } >= 0.0 {
-                            if j > 1 {
-                                1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx]
-                            } else {
-                                self.v[idx]
-                            }
-                        } else if (i + (j + 2) * nx) < self.v.len() && j < ny - 1 {
-                            1.5 * self.v[idx_n] - 0.5 * self.v[i + (j + 2) * nx]
-                        } else {
-                            self.v[idx_n]
-                        };
-                        let v_avg_n = 0.5 * (self.v[idx] + self.v[idx_n]);
-                        let f_n = v_avg_n * v_face_n;
-                        let idx_s = i + (j - 1) * nx;
-                        let v_face_s = if {
-                            let v_avg = 0.5 * (self.v[idx_s] + self.v[idx]);
-                            v_avg
-                        } >= 0.0 {
-                            if j > 1 {
-                                1.5 * self.v[idx_s] - 0.5 * self.v[i + (j - 2) * nx]
-                            } else {
-                                self.v[idx_s]
-                            }
-                        } else if j < ny {
-                            1.5 * self.v[idx] - 0.5 * self.v[i + (j + 1) * nx]
-                        } else {
-                            self.v[idx]
-                        };
-                        let v_avg_s = 0.5 * (self.v[idx_s] + self.v[idx]);
-                        let f_s = v_avg_s * v_face_s;
-                        let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
-                        let laplace = (self.v[(i + 1) + j * nx] - 2.0 * self.v[idx] + self.v[(i - 1) + j * nx])
-                            / (dx * dx)
-                            + (self.v[i + (j + 1) * nx] - 2.0 * self.v[idx] + self.v[i + (j - 1) * nx])
-                                / (dy * dy);
-                        self.v_star[idx] = self.v[idx] + dt_sub * (-convective + nu * laplace);
-                    }
-                    VelocityScheme::Quick => {
-                        // QUICK discretization for v.
-                        let idx_e = idx + 1;
-                        let u_e = self.u[(i + 1) + j * (nx + 1)];
-                        let v_face_e = if u_e >= 0.0 {
-                            if i >= 2 {
-                                (-self.v[idx - 1] + 6.0 * self.v[idx] + 3.0 * self.v[idx_e]) / 8.0
-                            } else {
-                                1.5 * self.v[idx] - 0.5 * self.v[idx - 1]
-                            }
-                        } else if i < nx - 2 {
-                            (3.0 * self.v[idx] + 6.0 * self.v[idx_e] - self.v[idx_e + 1]) / 8.0
-                        } else {
-                            self.v[idx_e]
-                        };
-                        let f_e = u_e * v_face_e;
-                        let idx_w = idx - 1;
-                        let u_w = self.u[i + j * (nx + 1)];
-                        let v_face_w = if u_w >= 0.0 {
-                            if i >= 3 {
-                                (-self.v[idx - 2] + 6.0 * self.v[idx_w] + 3.0 * self.v[idx])
-                                    / 8.0
-                            } else {
-                                1.5 * self.v[idx_w] - 0.5 * self.v[idx]
-                            }
-                        } else {
-                            (3.0 * self.v[idx_w] + 6.0 * self.v[idx] - self.v[idx_e]) / 8.0
-                        };
-                        let f_w = u_w * v_face_w;
-                        let idx_n = i + (j + 1) * nx;
-                        let v_avg_n = 0.5 * (self.v[idx] + self.v[idx_n]);
-                        let v_face_n = if v_avg_n >= 0.0 {
-                            if j >= 2 {
-                                (-self.v[i + (j - 1) * nx] + 6.0 * self.v[idx] + 3.0 * self.v[idx_n])
-                                    / 8.0
-                            } else {
-                                1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx]
-                            }
-                        } else if j < ny - 1 {
-                            (3.0 * self.v[idx] + 6.0 * self.v[idx_n] - self.v[i + (j + 2) * nx])
-                                / 8.0
-                        } else {
-                            self.v[idx_n]
-                        };
-                        let f_n = v_avg_n * v_face_n;
-                        let idx_s = i + (j - 1) * nx;
-                        let v_avg_s = 0.5 * (self.v[idx_s] + self.v[idx]);
-                        let v_face_s = if v_avg_s >= 0.0 {
-                            if j >= 2 {
-                                (-self.v[i + (j - 2) * nx] + 6.0 * self.v[idx_s] + 3.0 * self.v[idx])
-                                    / 8.0
-                            } else {
-                                1.5 * self.v[idx_s] - 0.5 * self.v[idx]
-                            }
-                        } else if j < ny - 1 {
-                            (3.0 * self.v[idx_s] + 6.0 * self.v[idx] - self.v[i + (j + 1) * nx])
-                                / 8.0
-                        } else {
-                            self.v[idx]
-                        };
-                        let f_s = v_avg_s * v_face_s;
-                        let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
-                        let laplace = (self.v[(i + 1) + j * nx] - 2.0 * self.v[idx] + self.v[(i - 1) + j * nx])
-                            / (dx * dx)
-                            + (self.v[i + (j + 1) * nx] - 2.0 * self.v[idx] + self.v[i + (j - 1) * nx])
-                                / (dy * dy);
-                        self.v_star[idx] = self.v[idx] + dt_sub * (-convective + nu * laplace);
-                    }
-                }
+                // For v the east/west fluxes also involve the u–field.
+                let u_e = self.u[(i + 1) + j * (nx + 1)];
+                let f_e = u_e * self.v_face_e(i, j);
+                let u_w = self.u[i + j * (nx + 1)];
+                let f_w = u_w * self.v_face_w(i, j);
+                let f_n = self.v_face_n(i, j) * self.v_face_n(i, j);
+                let f_s = self.v_face_s(i, j) * self.v_face_s(i, j);
+                let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
+                let laplace = (self.v[(i + 1) + j * nx] - 2.0 * self.v[idx] + self.v[(i - 1) + j * nx])
+                    / (dx * dx)
+                    + (self.v[i + (j + 1) * nx] - 2.0 * self.v[idx] + self.v[i + (j - 1) * nx])
+                        / (dy * dy);
+                self.v_star[idx] = self.v[idx] + dt_sub * (-convective + nu * laplace);
             }
         }
 
@@ -906,6 +560,277 @@ impl Model {
             let cfl = 0.5;
             let dt_cfl = cfl * self.grid.dx.min(self.grid.dy) / max_vel;
             dt_cfl.min(self.dt)
+        }
+    }
+
+    // --- Helper methods for u velocity discretization ---
+
+    fn u_face_e(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        match self.velocity_scheme {
+            VelocityScheme::FirstOrder => {
+                let idx_e = idx + 1;
+                let u_avg_e = 0.5 * (self.u[idx] + self.u[idx_e]);
+                if u_avg_e >= 0.0 { self.u[idx] } else { self.u[idx_e] }
+            }
+            VelocityScheme::SecondOrder => {
+                let idx_e = idx + 1;
+                if self.u[idx] >= 0.0 {
+                    if i > 1 { 1.5 * self.u[idx] - 0.5 * self.u[idx - 1] }
+                    else { self.u[idx] }
+                } else if (idx_e + 1) < self.u.len() && i < nx - 1 {
+                    1.5 * self.u[idx_e] - 0.5 * self.u[idx_e + 1]
+                } else {
+                    self.u[idx_e]
+                }
+            }
+            VelocityScheme::Quick => {
+                if self.u[idx] >= 0.0 {
+                    if i >= 2 {
+                        (-self.u[idx - 1] + 6.0 * self.u[idx] + 3.0 * self.u[idx + 1]) / 8.0
+                    } else {
+                        1.5 * self.u[idx] - 0.5 * self.u[idx - 1]
+                    }
+                } else if i <= nx - 2 {
+                    (3.0 * self.u[idx] + 6.0 * self.u[idx + 1] - self.u[idx + 2]) / 8.0
+                } else {
+                    self.u[idx + 1]
+                }
+            }
+        }
+    }
+
+    fn u_face_w(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        match self.velocity_scheme {
+            VelocityScheme::FirstOrder => {
+                let idx_w = idx - 1;
+                let u_avg_w = 0.5 * (self.u[idx_w] + self.u[idx]);
+                if u_avg_w >= 0.0 { self.u[idx_w] } else { self.u[idx] }
+            }
+            VelocityScheme::SecondOrder => {
+                let idx_w = idx - 1;
+                if self.u[idx_w] >= 0.0 {
+                    if i > 2 { 1.5 * self.u[idx_w] - 0.5 * self.u[idx_w - 1] }
+                    else { self.u[idx_w] }
+                } else {
+                    if i < nx { 1.5 * self.u[idx] - 0.5 * self.u[idx + 1] }
+                    else { self.u[idx] }
+                }
+            }
+            VelocityScheme::Quick => {
+                if self.u[idx - 1] >= 0.0 {
+                    if i >= 3 {
+                        (-self.u[idx - 2] + 6.0 * self.u[idx - 1] + 3.0 * self.u[idx]) / 8.0
+                    } else {
+                        1.5 * self.u[idx - 1] - 0.5 * self.u[idx]
+                    }
+                } else {
+                    (3.0 * self.u[idx - 1] + 6.0 * self.u[idx] - self.u[idx + 1]) / 8.0
+                }
+            }
+        }
+    }
+
+    fn u_face_n(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        let idx_n = i + (j + 1) * (nx + 1);
+        let v_n = self.get_v_north(i, j);
+        match self.velocity_scheme {
+            VelocityScheme::FirstOrder => {
+                if v_n >= 0.0 { self.u[idx] } else { self.u[idx_n] }
+            }
+            VelocityScheme::SecondOrder => {
+                if v_n >= 0.0 {
+                    if j > 1 { 1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)] }
+                    else { self.u[idx] }
+                } else if (i + (j + 2) * (nx + 1)) < self.u.len() && j < self.grid.ny - 1 {
+                    1.5 * self.u[idx_n] - 0.5 * self.u[i + (j + 2) * (nx + 1)]
+                } else { self.u[idx_n] }
+            }
+            VelocityScheme::Quick => {
+                if v_n >= 0.0 {
+                    if j >= 2 {
+                        (-self.u[i + (j - 1) * (nx + 1)] + 6.0 * self.u[idx] + 3.0 * self.u[idx_n]) / 8.0
+                    } else {
+                        1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)]
+                    }
+                } else if j < self.grid.ny - 2 {
+                    (3.0 * self.u[idx] + 6.0 * self.u[idx_n] - self.u[i + (j + 2) * (nx + 1)]) / 8.0
+                } else {
+                    self.u[idx_n]
+                }
+            }
+        }
+    }
+
+    fn u_face_s(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        let idx_s = i + (j - 1) * (nx + 1);
+        let v_s = self.get_v_south(i, j);
+        match self.velocity_scheme {
+            VelocityScheme::FirstOrder => {
+                if v_s >= 0.0 { self.u[idx_s] } else { self.u[idx] }
+            }
+            VelocityScheme::SecondOrder => {
+                if v_s >= 0.0 {
+                    if j > 1 { 1.5 * self.u[idx_s] - 0.5 * self.u[i + (j - 2) * (nx + 1)] }
+                    else { self.u[idx_s] }
+                } else if j < self.grid.ny {
+                    1.5 * self.u[idx] - 0.5 * self.u[i + (j + 1) * (nx + 1)]
+                } else { self.u[idx] }
+            }
+            VelocityScheme::Quick => {
+                if v_s >= 0.0 {
+                    if j >= 2 {
+                        (-self.u[i + (j - 2) * (nx + 1)] + 6.0 * self.u[idx_s] + 3.0 * self.u[idx]) / 8.0
+                    } else {
+                        1.5 * self.u[idx_s] - 0.5 * self.u[idx]
+                    }
+                } else if j < self.grid.ny - 1 {
+                    (3.0 * self.u[idx_s] + 6.0 * self.u[idx] - self.u[i + (j + 1) * (nx + 1)]) / 8.0
+                } else {
+                    self.u[idx]
+                }
+            }
+        }
+    }
+
+    fn get_v_north(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx_v_nw = if i > 0 { (i - 1) + (j + 1) * nx } else { 0 };
+        let idx_v_n = i + (j + 1) * nx;
+        0.5 * (self.v[idx_v_nw] + self.v[idx_v_n])
+    }
+
+    fn get_v_south(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx_v_s = if i > 0 { (i - 1) + j * nx } else { 0 };
+        let idx_v = i + j * nx;
+        0.5 * (self.v[idx_v_s] + self.v[idx_v])
+    }
+
+    // --- Helper methods for v velocity discretization ---
+
+    fn v_face_e(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let u_e = self.u[(i + 1) + j * (nx + 1)];
+        match self.velocity_scheme {
+            VelocityScheme::FirstOrder => {
+                if u_e >= 0.0 { self.v[idx] } else { self.v[idx + 1] }
+            }
+            VelocityScheme::SecondOrder => {
+                if u_e >= 0.0 {
+                    if i > 0 { 1.5 * self.v[idx] - 0.5 * self.v[idx - 1] } else { self.v[idx] }
+                } else if (idx + 2) < self.v.len() && i < nx - 2 {
+                    1.5 * self.v[idx + 1] - 0.5 * self.v[idx + 2]
+                } else { self.v[idx + 1] }
+            }
+            VelocityScheme::Quick => {
+                if u_e >= 0.0 {
+                    if i >= 2 {
+                        (-self.v[idx - 1] + 6.0 * self.v[idx] + 3.0 * self.v[idx + 1]) / 8.0
+                    } else { 1.5 * self.v[idx] - 0.5 * self.v[idx - 1] }
+                } else if i < nx - 2 {
+                    (3.0 * self.v[idx] + 6.0 * self.v[idx + 1] - self.v[idx + 2]) / 8.0
+                } else {
+                    self.v[idx + 1]
+                }
+            }
+        }
+    }
+
+    fn v_face_w(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let u_w = self.u[i + j * (nx + 1)];
+        match self.velocity_scheme {
+            VelocityScheme::FirstOrder => {
+                if u_w >= 0.0 { self.v[idx - 1] } else { self.v[idx] }
+            }
+            VelocityScheme::SecondOrder => {
+                if u_w >= 0.0 {
+                    if i > 1 { 1.5 * self.v[idx - 1] - 0.5 * self.v[idx - 2] } else { self.v[idx - 1] }
+                } else if i < nx - 1 {
+                    1.5 * self.v[idx] - 0.5 * self.v[idx + 1]
+                } else { self.v[idx] }
+            }
+            VelocityScheme::Quick => {
+                if u_w >= 0.0 {
+                    if i >= 3 {
+                        (-self.v[idx - 2] + 6.0 * self.v[idx - 1] + 3.0 * self.v[idx]) / 8.0
+                    } else { 1.5 * self.v[idx - 1] - 0.5 * self.v[idx] }
+                } else {
+                    (3.0 * self.v[idx - 1] + 6.0 * self.v[idx] - self.v[idx + 1]) / 8.0
+                }
+            }
+        }
+    }
+
+    fn v_face_n(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let idx_n = i + (j + 1) * nx;
+        let v_avg = 0.5 * (self.v[idx] + self.v[idx_n]);
+        match self.velocity_scheme {
+            VelocityScheme::FirstOrder => {
+                if v_avg >= 0.0 { self.v[idx] } else { self.v[idx_n] }
+            }
+            VelocityScheme::SecondOrder => {
+                if v_avg >= 0.0 {
+                    if j > 1 { 1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx] }
+                    else { self.v[idx] }
+                } else if (i + (j + 2) * nx) < self.v.len() && j < self.grid.ny - 1 {
+                    1.5 * self.v[idx_n] - 0.5 * self.v[i + (j + 2) * nx]
+                } else { self.v[idx_n] }
+            }
+            VelocityScheme::Quick => {
+                if v_avg >= 0.0 {
+                    if j >= 2 {
+                        (-self.v[i + (j - 1) * nx] + 6.0 * self.v[idx] + 3.0 * self.v[idx_n]) / 8.0
+                    } else { 1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx] }
+                } else if j < self.grid.ny - 1 {
+                    (3.0 * self.v[idx] + 6.0 * self.v[idx_n] - self.v[i + (j + 2) * nx]) / 8.0
+                } else {
+                    self.v[idx_n]
+                }
+            }
+        }
+    }
+
+    fn v_face_s(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let idx_s = i + (j - 1) * nx;
+        let v_avg = 0.5 * (self.v[idx_s] + self.v[idx]);
+        match self.velocity_scheme {
+            VelocityScheme::FirstOrder => {
+                if v_avg >= 0.0 { self.v[idx_s] } else { self.v[idx] }
+            }
+            VelocityScheme::SecondOrder => {
+                if v_avg >= 0.0 {
+                    if j > 1 { 1.5 * self.v[idx_s] - 0.5 * self.v[i + (j - 2) * nx] }
+                    else { self.v[idx_s] }
+                } else if j < self.grid.ny {
+                    1.5 * self.v[idx] - 0.5 * self.v[i + (j + 1) * nx]
+                } else { self.v[idx] }
+            }
+            VelocityScheme::Quick => {
+                if v_avg >= 0.0 {
+                    if j >= 2 {
+                        (-self.v[i + (j - 2) * nx] + 6.0 * self.v[idx_s] + 3.0 * self.v[idx]) / 8.0
+                    } else { 1.5 * self.v[idx_s] - 0.5 * self.v[idx] }
+                } else if j < self.grid.ny - 1 {
+                    (3.0 * self.v[idx_s] + 6.0 * self.v[idx] - self.v[i + (j + 1) * nx]) / 8.0
+                } else {
+                    self.v[idx]
+                }
+            }
         }
     }
 
