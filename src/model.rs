@@ -2,6 +2,7 @@ use nalgebra::DMatrix;
 
 /// A simple grid definition holding the number of pressure cells,
 /// as well as the physical dimensions and cell sizes.
+#[derive(Clone)]
 pub struct Grid {
     pub nx: usize, // number of pressure cells in x-direction
     pub ny: usize, // number of pressure cells in y-direction
@@ -14,6 +15,7 @@ pub struct Grid {
 }
 
 /// A circular obstacle defined by its center and radius.
+#[derive(Clone)]
 pub struct Cylinder {
     pub center_x: f32,
     pub center_y: f32,
@@ -92,6 +94,8 @@ pub struct Model {
 
     /// The last pressure residual (for time–step scaling).
     pub last_pressure_residual: f32,
+    pub last_u_residual: f32,
+    pub last_v_residual: f32,
 }
 
 impl Model {
@@ -158,6 +162,8 @@ impl Model {
             p_prime_new: vec![0.0; size_p],
             obstacle: obstacle_mask,
             last_pressure_residual: 0.0,
+            last_u_residual: 0.0,
+            last_v_residual: 0.0,
         }
     }
 
@@ -211,7 +217,11 @@ impl Model {
             .zip(self.v_old.iter())
             .map(|(new, old)| (new - old).abs())
             .fold(0.0_f32, |acc, delta| acc.max(delta));
-
+        
+        // Store U and V residuals
+        self.last_u_residual = max_residual_u;
+        self.last_v_residual = max_residual_v;
+        
         self.simulation_step += 1;
 
         // Adjust the number of substeps if the error norm is too high.
@@ -230,14 +240,7 @@ impl Model {
 
         // Automatic dt control (using a simple CFL condition).
         let previous_dt = self.dt;
-        let dt_cfl = self.compute_automatic_time_step();
-
-        // Optionally scale dt based on pressure residual.
-        let new_dt = if max_pressure_residual > 1e-3 {
-            dt_cfl * (1e-3 / (max_pressure_residual + 1e-10))
-        } else {
-            dt_cfl
-        };
+        let new_dt = self.compute_automatic_time_step();
 
         // Limit increase of dt to keep changes smooth.
         let max_increase_factor = 1.1;
@@ -939,6 +942,16 @@ impl Model {
     /// Returns the last computed pressure residual.
     pub fn get_last_pressure_residual(&self) -> f32 {
         self.last_pressure_residual
+    }
+
+    /// Returns the last computed U residual.
+    pub fn get_last_u_residual(&self) -> f32 {
+        self.last_u_residual
+    }
+
+    /// Returns the last computed V residual.
+    pub fn get_last_v_residual(&self) -> f32 {
+        self.last_v_residual
     }
 
     /// Optionally, convert the pressure field into a nalgebra DMatrix.
