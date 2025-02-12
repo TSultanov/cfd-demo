@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use nalgebra::DMatrix;
 
 /// A simple grid definition holding the number of pressure cells,
@@ -35,7 +37,6 @@ pub enum VelocityScheme {
 pub enum PressureSolver {
     Jacobi,
     SOR,
-    Multigrid,
 }
 
 /// Inlet velocity profile.
@@ -197,11 +198,14 @@ impl Model {
 
         // Perform the required number of substeps (PISO substeps)
         for _ in 0..self.substep_count {
+            let start_time = Instant::now();
             self.piso_step(dt_sub);
             let p_residual = self.get_last_pressure_residual();
             if p_residual > max_pressure_residual {
                 max_pressure_residual = p_residual;
             }
+            let piso_time = start_time.elapsed();
+            println!("piso time: {:?}", piso_time);
         }
 
         // Compute residual differences between the updated velocity fields and their old values.
@@ -692,6 +696,8 @@ impl Model {
             }
         }
 
+        let start_time = Instant::now();
+
         // ---------------- Pressure Correction Solver ----------------
         let denom = 2.0 / (dx * dx) + 2.0 / (dy * dy);
         match self.pressure_solver {
@@ -735,16 +741,13 @@ impl Model {
                 }
                 self.last_pressure_residual = max_error;
             }
-            PressureSolver::Multigrid => {
-                // Multigrid solver can be implemented here.
-                // For now we simply fall back to Jacobi.
-                self.jacobi_pressure(denom, dx, dy, nx, ny);
-            }
             PressureSolver::Jacobi => {
                 let residual = self.jacobi_pressure(denom, dx, dy, nx, ny);
                 self.last_pressure_residual = residual;
             }
         }
+        let corrector_time = start_time.elapsed();
+        println!("corrector time: {:?}", corrector_time);
 
         // ---------------- Corrector Step ----------------
         // Correct u

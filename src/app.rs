@@ -245,7 +245,6 @@ impl eframe::App for App {
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut params.pressure_solver, PressureSolver::Jacobi, "Jacobi");
                             ui.selectable_value(&mut params.pressure_solver, PressureSolver::SOR, "SOR");
-                            ui.selectable_value(&mut params.pressure_solver, PressureSolver::Multigrid, "Multigrid");
                         });
                 }
             });
