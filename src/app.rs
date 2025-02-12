@@ -1,18 +1,44 @@
 use eframe::egui;
 use crate::model::{Grid, Cylinder, Model, VelocityScheme, InletProfile, PressureSolver};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::Duration;
 
-/// Updated App struct holding simulation state and parameters.
+/// Updated App struct with simulation running in a background thread.
 pub struct App {
-    simulation_running: bool,
-    model: Model,
-    // Simulation parameters (which can be controlled via the UI)
-    dt: f32,
-    viscosity: f32,
-    target_inlet_velocity: f32,
-    velocity_scheme: VelocityScheme,
-    inlet_profile: InletProfile,
-    pressure_solver: PressureSolver,
-    simulation_time: f32, // Accumulated simulation time
+    simulation_running: Arc<AtomicBool>,
+    simulation_state: Arc<Mutex<SimulationState>>,
+    simulation_params: Arc<Mutex<SimulationParams>>,
+}
+
+/// New helper structure to hold the simulation state.
+pub struct SimulationState {
+    pub model: Model,
+    pub simulation_time: f32,
+}
+
+/// New helper structure to hold simulation parameters.
+pub struct SimulationParams {
+    pub dt: f32,
+    pub viscosity: f32,
+    pub target_inlet_velocity: f32,
+    pub velocity_scheme: VelocityScheme,
+    pub inlet_profile: InletProfile,
+    pub pressure_solver: PressureSolver,
+}
+
+impl Default for SimulationParams {
+    fn default() -> Self {
+        Self {
+            dt: 0.5,
+            viscosity: 0.000001,
+            target_inlet_velocity: 1.0,
+            velocity_scheme: VelocityScheme::FirstOrder,
+            inlet_profile: InletProfile::Uniform,
+            pressure_solver: PressureSolver::Jacobi,
+        }
+    }
 }
 
 impl Default for App {
@@ -38,23 +64,47 @@ impl Default for App {
             }),
         };
         Self {
-            simulation_running: false,
-            model: Model::new(grid),
-            dt: 0.5,
-            viscosity: 0.000001,
-            target_inlet_velocity: 1.0,
-            velocity_scheme: VelocityScheme::FirstOrder,
-            inlet_profile: InletProfile::Uniform,
-            pressure_solver: PressureSolver::Jacobi,
-            simulation_time: 0.0,
+            simulation_running: Arc::new(AtomicBool::new(false)),
+            simulation_state: Arc::new(Mutex::new(SimulationState {
+                model: Model::new(grid),
+                simulation_time: 0.0,
+            })),
+            simulation_params: Arc::new(Mutex::new(SimulationParams::default())),
         }
     }
 }
 
 impl App {
-    // New constructor calling Default::default()
+    // New constructor that also spawns the simulation background thread.
     pub fn new(_cc: &eframe::CreationContext) -> Self {
-        Self::default()
+        let app = Self::default();
+
+        // Spawn background simulation thread.
+        let simulation_state = Arc::clone(&app.simulation_state);
+        let simulation_params = Arc::clone(&app.simulation_params);
+        let simulation_running = Arc::clone(&app.simulation_running);
+
+        thread::spawn(move || loop {
+            if simulation_running.load(Ordering::Relaxed) {
+                // Lock simulation parameters and state.
+                let params = simulation_params.lock().unwrap();
+                let mut state = simulation_state.lock().unwrap();
+                state.model.set_dt(params.dt);
+                state.model.set_viscosity(params.viscosity);
+                state
+                    .model
+                    .set_target_inlet_velocity(params.target_inlet_velocity);
+                state.model.set_velocity_scheme(params.velocity_scheme);
+                state.model.set_inlet_profile(params.inlet_profile);
+                state.model.set_pressure_solver(params.pressure_solver);
+                state.model.update();
+                state.simulation_time += params.dt;
+                // Locks are released here.
+            }
+            thread::sleep(Duration::from_millis(16));
+        });
+
+        app
     }
 }
 
@@ -64,13 +114,13 @@ impl eframe::App for App {
         egui::SidePanel::left("control_panel").show(ctx, |ui| {
             ui.vertical(|ui| {
                 if ui.button("Start").clicked() {
-                    self.simulation_running = true;
+                    self.simulation_running.store(true, Ordering::Relaxed);
                 }
                 if ui.button("Pause").clicked() {
-                    self.simulation_running = false;
+                    self.simulation_running.store(false, Ordering::Relaxed);
                 }
                 if ui.button("Reset").clicked() {
-                    // Reinitialize the simulation model with the same grid parameters:
+                    // Reinitialize the simulation model and simulation time:
                     let nx = 400;
                     let ny = 132;
                     let lx = 30.0;
@@ -90,56 +140,45 @@ impl eframe::App for App {
                             radius: 0.75,
                         }),
                     };
-                    self.model = Model::new(grid);
-                    self.simulation_running = false;
-                    self.simulation_time = 0.0;
+                    let mut state = self.simulation_state.lock().unwrap();
+                    state.model = Model::new(grid);
+                    state.simulation_time = 0.0;
+                    self.simulation_running.store(false, Ordering::Relaxed);
                 }
                 ui.label("Simulation Parameters");
-                ui.add(egui::Slider::new(&mut self.dt, 0.001..=1.0).text("Time Step"));
-                ui.add(egui::Slider::new(&mut self.viscosity, 1e-6..=0.1).text("Viscosity"));
-                ui.add(egui::Slider::new(&mut self.target_inlet_velocity, 0.0..=5.0).text("Target Inlet Velocity"));
-                // ComboBox for Velocity Scheme.
-                egui::ComboBox::from_label("Velocity Scheme")
-                    .selected_text(format!("{:?}", self.velocity_scheme))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.velocity_scheme, VelocityScheme::FirstOrder, "FirstOrder Upwind");
-                        ui.selectable_value(&mut self.velocity_scheme, VelocityScheme::SecondOrder, "SecondOrder Upwind");
-                        ui.selectable_value(&mut self.velocity_scheme, VelocityScheme::Quick, "QUICK Scheme");
-                    });
-                // ComboBox for Inlet Profile.
-                egui::ComboBox::from_label("Inlet Profile")
-                    .selected_text(format!("{:?}", self.inlet_profile))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.inlet_profile, InletProfile::Uniform, "Uniform");
-                        ui.selectable_value(&mut self.inlet_profile, InletProfile::Parabolic, "Parabolic");
-                    });
-                // ComboBox for Pressure Solver.
-                egui::ComboBox::from_label("Pressure Solver")
-                    .selected_text(format!("{:?}", self.pressure_solver))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.pressure_solver, PressureSolver::Jacobi, "Jacobi");
-                        ui.selectable_value(&mut self.pressure_solver, PressureSolver::SOR, "SOR");
-                        ui.selectable_value(&mut self.pressure_solver, PressureSolver::Multigrid, "Multigrid");
-                    });
+                {
+                    let mut params = self.simulation_params.lock().unwrap();
+                    ui.add(egui::Slider::new(&mut params.dt, 0.001..=1.0).text("Time Step"));
+                    ui.add(egui::Slider::new(&mut params.viscosity, 1e-6..=0.1).text("Viscosity"));
+                    ui.add(egui::Slider::new(&mut params.target_inlet_velocity, 0.0..=5.0).text("Target Inlet Velocity"));
+                    egui::ComboBox::from_label("Velocity Scheme")
+                        .selected_text(format!("{:?}", params.velocity_scheme))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut params.velocity_scheme, VelocityScheme::FirstOrder, "FirstOrder Upwind");
+                            ui.selectable_value(&mut params.velocity_scheme, VelocityScheme::SecondOrder, "SecondOrder Upwind");
+                            ui.selectable_value(&mut params.velocity_scheme, VelocityScheme::Quick, "QUICK Scheme");
+                        });
+                    egui::ComboBox::from_label("Inlet Profile")
+                        .selected_text(format!("{:?}", params.inlet_profile))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut params.inlet_profile, InletProfile::Uniform, "Uniform");
+                            ui.selectable_value(&mut params.inlet_profile, InletProfile::Parabolic, "Parabolic");
+                        });
+                    egui::ComboBox::from_label("Pressure Solver")
+                        .selected_text(format!("{:?}", params.pressure_solver))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut params.pressure_solver, PressureSolver::Jacobi, "Jacobi");
+                            ui.selectable_value(&mut params.pressure_solver, PressureSolver::SOR, "SOR");
+                            ui.selectable_value(&mut params.pressure_solver, PressureSolver::Multigrid, "Multigrid");
+                        });
+                }
             });
         });
 
-        // --- CENTRAL PANEL: Simulation update and visualization on the right ---
+        // --- CENTRAL PANEL: Visualization ---
         egui::CentralPanel::default().show(ctx, |ui| {
-            // Update simulation if running:
-            if self.simulation_running {
-                self.model.set_dt(self.dt);
-                self.model.set_viscosity(self.viscosity);
-                self.model.set_target_inlet_velocity(self.target_inlet_velocity);
-                self.model.set_velocity_scheme(self.velocity_scheme);
-                self.model.set_inlet_profile(self.inlet_profile);
-                self.model.set_pressure_solver(self.pressure_solver);
-                self.model.update();
-                // Accumulate simulation time using the current dt.
-                self.simulation_time += self.dt;
-            }
-
-            let grid = &self.model.grid;
+            let state = self.simulation_state.lock().unwrap();
+            let grid = &state.model.grid;
             let nx = grid.nx;
             let ny = grid.ny;
             if nx == 0 || ny == 0 {
@@ -147,7 +186,7 @@ impl eframe::App for App {
             }
 
             // Get the simulation pressure field.
-            let pressure = self.model.get_pressure();
+            let pressure = state.model.get_pressure();
 
             // Compute min and max pressure for color mapping.
             let (mut min_p, mut max_p) = (f32::INFINITY, f32::NEG_INFINITY);
@@ -196,14 +235,14 @@ impl eframe::App for App {
 
         egui::TopBottomPanel::bottom("bottom_panel").show(ctx, |ui| {
             ui.separator();
-            // Use the accumulated simulation time.
-            let simulation_time = self.simulation_time;
+            let state = self.simulation_state.lock().unwrap();
+            let simulation_time = state.simulation_time;
             let log_text = format!(
                 "Step: {}, Time: {:.3} s, dt: {:.3} s, Residual: {:.3e}",
-                self.model.simulation_step,
+                state.model.simulation_step,
                 simulation_time,
-                self.dt,
-                self.model.get_last_pressure_residual(),
+                self.simulation_params.lock().unwrap().dt,
+                state.model.get_last_pressure_residual(),
             );
             egui::ScrollArea::vertical()
                 .min_scrolled_height(200.0)
@@ -211,6 +250,11 @@ impl eframe::App for App {
                     ui.label(log_text);
                 });
         });
+
+        // Request a repaint if the simulation is running so that the UI updates continuously.
+        if self.simulation_running.load(Ordering::Relaxed) {
+            ctx.request_repaint();
+        }
     }
 }
 
