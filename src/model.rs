@@ -187,7 +187,20 @@ pub struct Model {
     pub v_old: Vec<f32>,
 
     // Predictor (star) fields
+    u_v_n: Vec<f32>,
+    u_v_s: Vec<f32>,
+    u_u_e: Vec<f32>,
+    u_u_w: Vec<f32>,
+    u_u_n: Vec<f32>,
+    u_u_s: Vec<f32>,
     pub u_star: Vec<f32>,
+
+    v_u_e: Vec<f32>,
+    v_u_w: Vec<f32>,
+    v_v_n: Vec<f32>,
+    v_v_s: Vec<f32>,
+    v_v_e: Vec<f32>,
+    v_v_w: Vec<f32>,
     pub v_star: Vec<f32>,
 
     /// Right-hand side for pressure correction (divergence residual)
@@ -237,7 +250,21 @@ impl Model {
             v_prev: v.clone(),
             u_old: u.clone(),
             v_old: v.clone(),
+
+            u_v_n: u.clone(),
+            u_v_s: u.clone(),
+            u_u_e: u.clone(),
+            u_u_w: u.clone(),
+            u_u_n: u.clone(),
+            u_u_s: u.clone(),
             u_star: u.clone(),
+
+            v_u_e: v.clone(),
+            v_u_w: v.clone(),
+            v_v_n: v.clone(),
+            v_v_s: v.clone(),
+            v_v_e: v.clone(),
+            v_v_w: v.clone(),
             v_star: v.clone(),
             rhs: vec![0.0; size_p],
             p_prime: vec![0.0; size_p],
@@ -365,6 +392,54 @@ impl Model {
 
         // ---------------- Predictor for u ----------------
         // Loop over internal u faces.
+        match self.velocity_scheme {
+            VelocityScheme::FirstOrder => {
+                for j in 1..(ny - 1) {
+                    for i in 1..nx {
+                        let idx = i + j * (nx + 1);
+
+                        self.u_v_n[idx] = self.get_v_north(i, j);
+                        self.u_v_s[idx] = self.get_v_south(i, j);
+
+                        self.u_u_e[idx] = self.u_face_e_first_order(i, j);
+                        self.u_u_w[idx] = self.u_face_w_first_order(i, j);
+                        self.u_u_n[idx] = self.u_face_n_first_order(i, j);
+                        self.u_u_s[idx] = self.u_face_s_first_order(i, j);
+                    }
+                }
+            }
+            VelocityScheme::SecondOrder => {
+                for j in 1..(ny - 1) {
+                    for i in 1..nx {
+                        let idx = i + j * (nx + 1);
+
+                        self.u_v_n[idx] = self.get_v_north(i, j);
+                        self.u_v_s[idx] = self.get_v_south(i, j);
+
+                        self.u_u_e[idx] = self.u_face_e_second_order(i, j);
+                        self.u_u_w[idx] = self.u_face_w_second_order(i, j);
+                        self.u_u_n[idx] = self.u_face_n_second_order(i, j);
+                        self.u_u_s[idx] = self.u_face_s_second_order(i, j);
+                    }
+                }
+            }
+            VelocityScheme::Quick => {
+                for j in 1..(ny - 1) {
+                    for i in 1..nx {
+                        let idx = i + j * (nx + 1);
+
+                        self.u_v_n[idx] = self.get_v_north(i, j);
+                        self.u_v_s[idx] = self.get_v_south(i, j);
+
+                        self.u_u_e[idx] = self.u_face_e_quick(i, j);
+                        self.u_u_w[idx] = self.u_face_w_quick(i, j);
+                        self.u_u_n[idx] = self.u_face_n_quick(i, j);
+                        self.u_u_s[idx] = self.u_face_s_quick(i, j);
+                    }
+                }
+            }
+        }
+
         for j in 1..(ny - 1) {
             for i in 1..nx {
                 let idx = i + j * (nx + 1);
@@ -374,16 +449,17 @@ impl Model {
                     self.u_star[idx] = 0.0;
                     continue;
                 }
-                // Instead of a match block per scheme, we now use helper functions.
-                let u_e = self.u_face_e(i, j);
-                let u_w = self.u_face_w(i, j);
-                let v_n = self.get_v_north(i, j);
-                let u_n = self.u_face_n(i, j);
-                let v_s = self.get_v_south(i, j);
-                let u_s = self.u_face_s(i, j);
+
+                let u_e = self.u_u_e[idx];
+                let u_w = self.u_u_w[idx];
+                let v_n = self.u_v_n[idx];
+                let v_s = self.u_v_s[idx];
+                let u_n = self.u_u_n[idx];
+                let u_s = self.u_u_s[idx];
 
                 let f_e = u_e * u_e;
                 let f_w = u_w * u_w;
+
                 let f_n = v_n * u_n;
                 let f_s = v_s * u_s;
                 let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
@@ -400,6 +476,51 @@ impl Model {
 
         // ---------------- Predictor for v ----------------
         // Loop over internal v faces.
+        match self.velocity_scheme {
+            VelocityScheme::FirstOrder => {
+                for j in 1..ny {
+                    for i in 1..(nx - 1) {
+                        let idx = i + j * nx;
+                        self.v_u_e[idx] = self.u[(i + 1) + j * (nx + 1)];
+                        self.v_u_w[idx] = self.u[i + j * (nx + 1)];
+
+                        self.v_v_n[idx] = self.v_face_n_first_order(i, j);
+                        self.v_v_s[idx] = self.v_face_s_first_order(i, j);
+                        self.v_v_e[idx] = self.v_face_e_first_order(i, j);
+                        self.v_v_w[idx] = self.v_face_w_first_order(i, j);
+                    }
+                }
+            }
+            VelocityScheme::SecondOrder => {
+                for j in 1..ny {
+                    for i in 1..(nx - 1) {
+                        let idx = i + j * nx;
+                        self.v_u_e[idx] = self.u[(i + 1) + j * (nx + 1)];
+                        self.v_u_w[idx] = self.u[i + j * (nx + 1)];
+
+                        self.v_v_n[idx] = self.v_face_n_second_order(i, j);
+                        self.v_v_s[idx] = self.v_face_s_second_order(i, j);
+                        self.v_v_e[idx] = self.v_face_e_second_order(i, j);
+                        self.v_v_w[idx] = self.v_face_w_second_order(i, j);
+                    }
+                }
+            }
+            VelocityScheme::Quick => {
+                for j in 1..ny {
+                    for i in 1..(nx - 1) {
+                        let idx = i + j * nx;
+                        self.v_u_e[idx] = self.u[(i + 1) + j * (nx + 1)];
+                        self.v_u_w[idx] = self.u[i + j * (nx + 1)];
+
+                        self.v_v_n[idx] = self.v_face_n_quick(i, j);
+                        self.v_v_s[idx] = self.v_face_s_quick(i, j);
+                        self.v_v_e[idx] = self.v_face_e_quick(i, j);
+                        self.v_v_w[idx] = self.v_face_w_quick(i, j);
+                    }
+                }
+            }
+        }
+
         for j in 1..ny {
             for i in 1..(nx - 1) {
                 let idx = i + j * nx;
@@ -410,12 +531,18 @@ impl Model {
                     continue;
                 }
                 // For v the east/west fluxes also involve the u–field.
-                let u_e = self.u[(i + 1) + j * (nx + 1)];
-                let f_e = u_e * self.v_face_e(i, j);
-                let u_w = self.u[i + j * (nx + 1)];
-                let f_w = u_w * self.v_face_w(i, j);
-                let f_n = self.v_face_n(i, j) * self.v_face_n(i, j);
-                let f_s = self.v_face_s(i, j) * self.v_face_s(i, j);
+
+                let u_e = self.v_u_e[idx];
+                let u_w = self.v_u_w[idx];
+                let v_n = self.v_v_n[idx];
+                let v_s = self.v_v_s[idx];
+                let v_e = self.v_v_e[idx];
+                let v_w = self.v_v_w[idx];
+
+                let f_e = u_e * v_e;
+                let f_w = u_w * v_w;
+                let f_n = v_n * v_n;
+                let f_s = v_s * v_s;
                 let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
                 let laplace = (self.v[(i + 1) + j * nx] - 2.0 * self.v[idx]
                     + self.v[(i - 1) + j * nx])
@@ -523,6 +650,7 @@ impl Model {
     }
 
     /// A helper for the Jacobi pressure correction solver.
+    #[inline(never)]
     fn jacobi_pressure(&mut self, denom: f32, dx: f32, dy: f32, nx: usize, ny: usize) -> f32 {
         self.p_prime.fill(0.0);
         let jacobi_omega = 0.7;
@@ -659,179 +787,205 @@ impl Model {
     }
 
     // --- Helper methods for u velocity discretization ---
-
-    fn u_face_e(&self, i: usize, j: usize) -> f32 {
+    #[inline(always)]
+    fn u_face_e_first_order(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
-        match self.velocity_scheme {
-            VelocityScheme::FirstOrder => {
-                let idx_e = idx + 1;
-                let u_avg_e = 0.5 * (self.u[idx] + self.u[idx_e]);
-                if u_avg_e >= 0.0 {
-                    self.u[idx]
-                } else {
-                    self.u[idx_e]
-                }
+        let idx_e = idx + 1;
+        let u_avg_e = 0.5 * (self.u[idx] + self.u[idx_e]);
+        if u_avg_e >= 0.0 {
+            self.u[idx]
+        } else {
+            self.u[idx_e]
+        }
+    }
+
+    #[inline(always)]
+    fn u_face_e_second_order(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        let idx_e = idx + 1;
+        if self.u[idx] >= 0.0 {
+            if i > 1 {
+                1.5 * self.u[idx] - 0.5 * self.u[idx - 1]
+            } else {
+                self.u[idx]
             }
-            VelocityScheme::SecondOrder => {
-                let idx_e = idx + 1;
-                if self.u[idx] >= 0.0 {
-                    if i > 1 {
-                        1.5 * self.u[idx] - 0.5 * self.u[idx - 1]
-                    } else {
-                        self.u[idx]
-                    }
-                } else if (idx_e + 1) < self.u.len() && i < nx - 1 {
-                    1.5 * self.u[idx_e] - 0.5 * self.u[idx_e + 1]
-                } else {
-                    self.u[idx_e]
-                }
+        } else if (idx_e + 1) < self.u.len() && i < nx - 1 {
+            1.5 * self.u[idx_e] - 0.5 * self.u[idx_e + 1]
+        } else {
+            self.u[idx_e]
+        }
+    }
+
+    #[inline(always)]
+    fn u_face_e_quick(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        if self.u[idx] >= 0.0 {
+            if i >= 2 {
+                (-self.u[idx - 1] + 6.0 * self.u[idx] + 3.0 * self.u[idx + 1]) / 8.0
+            } else {
+                1.5 * self.u[idx] - 0.5 * self.u[idx - 1]
             }
-            VelocityScheme::Quick => {
-                if self.u[idx] >= 0.0 {
-                    if i >= 2 {
-                        (-self.u[idx - 1] + 6.0 * self.u[idx] + 3.0 * self.u[idx + 1]) / 8.0
-                    } else {
-                        1.5 * self.u[idx] - 0.5 * self.u[idx - 1]
-                    }
-                } else if i <= nx - 2 {
-                    (3.0 * self.u[idx] + 6.0 * self.u[idx + 1] - self.u[idx + 2]) / 8.0
-                } else {
-                    self.u[idx + 1]
-                }
+        } else if i <= nx - 2 {
+            (3.0 * self.u[idx] + 6.0 * self.u[idx + 1] - self.u[idx + 2]) / 8.0
+        } else {
+            self.u[idx + 1]
+        }
+    }
+
+    #[inline(always)]
+    fn u_face_w_first_order(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        let idx_w = idx - 1;
+        let u_avg_w = 0.5 * (self.u[idx_w] + self.u[idx]);
+        if u_avg_w >= 0.0 {
+            self.u[idx_w]
+        } else {
+            self.u[idx]
+        }
+    }
+
+    #[inline(always)]
+    fn u_face_w_second_order(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        let idx_w = idx - 1;
+        if self.u[idx_w] >= 0.0 {
+            if i > 2 {
+                1.5 * self.u[idx_w] - 0.5 * self.u[idx_w - 1]
+            } else {
+                self.u[idx_w]
+            }
+        } else {
+            if i < nx {
+                1.5 * self.u[idx] - 0.5 * self.u[idx + 1]
+            } else {
+                self.u[idx]
             }
         }
     }
 
-    fn u_face_w(&self, i: usize, j: usize) -> f32 {
+    #[inline(always)]
+    fn u_face_w_quick(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
-        match self.velocity_scheme {
-            VelocityScheme::FirstOrder => {
-                let idx_w = idx - 1;
-                let u_avg_w = 0.5 * (self.u[idx_w] + self.u[idx]);
-                if u_avg_w >= 0.0 {
-                    self.u[idx_w]
-                } else {
-                    self.u[idx]
-                }
+        if self.u[idx - 1] >= 0.0 {
+            if i >= 3 {
+                (-self.u[idx - 2] + 6.0 * self.u[idx - 1] + 3.0 * self.u[idx]) / 8.0
+            } else {
+                1.5 * self.u[idx - 1] - 0.5 * self.u[idx]
             }
-            VelocityScheme::SecondOrder => {
-                let idx_w = idx - 1;
-                if self.u[idx_w] >= 0.0 {
-                    if i > 2 {
-                        1.5 * self.u[idx_w] - 0.5 * self.u[idx_w - 1]
-                    } else {
-                        self.u[idx_w]
-                    }
-                } else {
-                    if i < nx {
-                        1.5 * self.u[idx] - 0.5 * self.u[idx + 1]
-                    } else {
-                        self.u[idx]
-                    }
-                }
-            }
-            VelocityScheme::Quick => {
-                if self.u[idx - 1] >= 0.0 {
-                    if i >= 3 {
-                        (-self.u[idx - 2] + 6.0 * self.u[idx - 1] + 3.0 * self.u[idx]) / 8.0
-                    } else {
-                        1.5 * self.u[idx - 1] - 0.5 * self.u[idx]
-                    }
-                } else {
-                    (3.0 * self.u[idx - 1] + 6.0 * self.u[idx] - self.u[idx + 1]) / 8.0
-                }
-            }
+        } else {
+            (3.0 * self.u[idx - 1] + 6.0 * self.u[idx] - self.u[idx + 1]) / 8.0
         }
     }
 
-    fn u_face_n(&self, i: usize, j: usize) -> f32 {
+    #[inline(always)]
+    fn u_face_n_first_order(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
         let idx_n = i + (j + 1) * (nx + 1);
         let v_n = self.get_v_north(i, j);
-        match self.velocity_scheme {
-            VelocityScheme::FirstOrder => {
-                if v_n >= 0.0 {
-                    self.u[idx]
-                } else {
-                    self.u[idx_n]
-                }
-            }
-            VelocityScheme::SecondOrder => {
-                if v_n >= 0.0 {
-                    if j > 1 {
-                        1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)]
-                    } else {
-                        self.u[idx]
-                    }
-                } else if (i + (j + 2) * (nx + 1)) < self.u.len() && j < self.grid.ny - 1 {
-                    1.5 * self.u[idx_n] - 0.5 * self.u[i + (j + 2) * (nx + 1)]
-                } else {
-                    self.u[idx_n]
-                }
-            }
-            VelocityScheme::Quick => {
-                if v_n >= 0.0 {
-                    if j >= 2 {
-                        (-self.u[i + (j - 1) * (nx + 1)] + 6.0 * self.u[idx] + 3.0 * self.u[idx_n])
-                            / 8.0
-                    } else {
-                        1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)]
-                    }
-                } else if j < self.grid.ny - 2 {
-                    (3.0 * self.u[idx] + 6.0 * self.u[idx_n] - self.u[i + (j + 2) * (nx + 1)]) / 8.0
-                } else {
-                    self.u[idx_n]
-                }
-            }
+        if v_n >= 0.0 {
+            self.u[idx]
+        } else {
+            self.u[idx_n]
         }
     }
 
-    fn u_face_s(&self, i: usize, j: usize) -> f32 {
+    #[inline(always)]
+    fn u_face_n_second_order(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        let idx_n = i + (j + 1) * (nx + 1);
+        let v_n = self.get_v_north(i, j);
+        if v_n >= 0.0 {
+            if j > 1 {
+                1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)]
+            } else {
+                self.u[idx]
+            }
+        } else if (i + (j + 2) * (nx + 1)) < self.u.len() && j < self.grid.ny - 1 {
+            1.5 * self.u[idx_n] - 0.5 * self.u[i + (j + 2) * (nx + 1)]
+        } else {
+            self.u[idx_n]
+        }
+    }
+
+    #[inline(always)]
+    fn u_face_n_quick(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        let idx_n = i + (j + 1) * (nx + 1);
+        let v_n = self.get_v_north(i, j);
+        if v_n >= 0.0 {
+            if j >= 2 {
+                (-self.u[i + (j - 1) * (nx + 1)] + 6.0 * self.u[idx] + 3.0 * self.u[idx_n]) / 8.0
+            } else {
+                1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)]
+            }
+        } else if j < self.grid.ny - 2 {
+            (3.0 * self.u[idx] + 6.0 * self.u[idx_n] - self.u[i + (j + 2) * (nx + 1)]) / 8.0
+        } else {
+            self.u[idx_n]
+        }
+    }
+
+    #[inline(always)]
+    fn u_face_s_first_order(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
         let idx_s = i + (j - 1) * (nx + 1);
         let v_s = self.get_v_south(i, j);
-        match self.velocity_scheme {
-            VelocityScheme::FirstOrder => {
-                if v_s >= 0.0 {
-                    self.u[idx_s]
-                } else {
-                    self.u[idx]
-                }
-            }
-            VelocityScheme::SecondOrder => {
-                if v_s >= 0.0 {
-                    if j > 1 {
-                        1.5 * self.u[idx_s] - 0.5 * self.u[i + (j - 2) * (nx + 1)]
-                    } else {
-                        self.u[idx_s]
-                    }
-                } else if j < self.grid.ny {
-                    1.5 * self.u[idx] - 0.5 * self.u[i + (j + 1) * (nx + 1)]
-                } else {
-                    self.u[idx]
-                }
-            }
-            VelocityScheme::Quick => {
-                if v_s >= 0.0 {
-                    if j >= 2 {
-                        (-self.u[i + (j - 2) * (nx + 1)] + 6.0 * self.u[idx_s] + 3.0 * self.u[idx])
-                            / 8.0
-                    } else {
-                        1.5 * self.u[idx_s] - 0.5 * self.u[idx]
-                    }
-                } else if j < self.grid.ny - 1 {
-                    (3.0 * self.u[idx_s] + 6.0 * self.u[idx] - self.u[i + (j + 1) * (nx + 1)]) / 8.0
-                } else {
-                    self.u[idx]
-                }
-            }
+        if v_s >= 0.0 {
+            self.u[idx_s]
+        } else {
+            self.u[idx]
         }
     }
 
+    #[inline(always)]
+    fn u_face_s_second_order(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        let idx_s = i + (j - 1) * (nx + 1);
+        let v_s = self.get_v_south(i, j);
+        if v_s >= 0.0 {
+            if j > 1 {
+                1.5 * self.u[idx_s] - 0.5 * self.u[i + (j - 2) * (nx + 1)]
+            } else {
+                self.u[idx_s]
+            }
+        } else if j < self.grid.ny {
+            1.5 * self.u[idx] - 0.5 * self.u[i + (j + 1) * (nx + 1)]
+        } else {
+            self.u[idx]
+        }
+    }
+
+    #[inline(always)]
+    fn u_face_s_quick(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * (nx + 1);
+        let idx_s = i + (j - 1) * (nx + 1);
+        let v_s = self.get_v_south(i, j);
+        if v_s >= 0.0 {
+            if j >= 2 {
+                (-self.u[i + (j - 2) * (nx + 1)] + 6.0 * self.u[idx_s] + 3.0 * self.u[idx]) / 8.0
+            } else {
+                1.5 * self.u[idx_s] - 0.5 * self.u[idx]
+            }
+        } else if j < self.grid.ny - 1 {
+            (3.0 * self.u[idx_s] + 6.0 * self.u[idx] - self.u[i + (j + 1) * (nx + 1)]) / 8.0
+        } else {
+            self.u[idx]
+        }
+    }
+
+    #[inline(always)]
     fn get_v_north(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx_v_nw = if i > 0 { (i - 1) + (j + 1) * nx } else { 0 };
@@ -839,6 +993,7 @@ impl Model {
         0.5 * (self.v[idx_v_nw] + self.v[idx_v_n])
     }
 
+    #[inline(always)]
     fn get_v_south(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx_v_s = if i > 0 { (i - 1) + j * nx } else { 0 };
@@ -847,168 +1002,199 @@ impl Model {
     }
 
     // --- Helper methods for v velocity discretization ---
-
-    fn v_face_e(&self, i: usize, j: usize) -> f32 {
+    #[inline(always)]
+    fn v_face_e_first_order(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * nx;
         let u_e = self.u[(i + 1) + j * (nx + 1)];
-        match self.velocity_scheme {
-            VelocityScheme::FirstOrder => {
-                if u_e >= 0.0 {
-                    self.v[idx]
-                } else {
-                    self.v[idx + 1]
-                }
-            }
-            VelocityScheme::SecondOrder => {
-                if u_e >= 0.0 {
-                    if i > 0 {
-                        1.5 * self.v[idx] - 0.5 * self.v[idx - 1]
-                    } else {
-                        self.v[idx]
-                    }
-                } else if (idx + 2) < self.v.len() && i < nx - 2 {
-                    1.5 * self.v[idx + 1] - 0.5 * self.v[idx + 2]
-                } else {
-                    self.v[idx + 1]
-                }
-            }
-            VelocityScheme::Quick => {
-                if u_e >= 0.0 {
-                    if i >= 2 {
-                        (-self.v[idx - 1] + 6.0 * self.v[idx] + 3.0 * self.v[idx + 1]) / 8.0
-                    } else {
-                        1.5 * self.v[idx] - 0.5 * self.v[idx - 1]
-                    }
-                } else if i < nx - 2 {
-                    (3.0 * self.v[idx] + 6.0 * self.v[idx + 1] - self.v[idx + 2]) / 8.0
-                } else {
-                    self.v[idx + 1]
-                }
-            }
+        if u_e >= 0.0 {
+            self.v[idx]
+        } else {
+            self.v[idx + 1]
         }
     }
 
-    fn v_face_w(&self, i: usize, j: usize) -> f32 {
+    #[inline(always)]
+    fn v_face_e_second_order(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let u_e = self.u[(i + 1) + j * (nx + 1)];
+        if u_e >= 0.0 {
+            if i > 0 {
+                1.5 * self.v[idx] - 0.5 * self.v[idx - 1]
+            } else {
+                self.v[idx]
+            }
+        } else if (idx + 2) < self.v.len() && i < nx - 2 {
+            1.5 * self.v[idx + 1] - 0.5 * self.v[idx + 2]
+        } else {
+            self.v[idx + 1]
+        }
+    }
+
+    #[inline(always)]
+    fn v_face_e_quick(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let u_e = self.u[(i + 1) + j * (nx + 1)];
+        if u_e >= 0.0 {
+            if i >= 2 {
+                (-self.v[idx - 1] + 6.0 * self.v[idx] + 3.0 * self.v[idx + 1]) / 8.0
+            } else {
+                1.5 * self.v[idx] - 0.5 * self.v[idx - 1]
+            }
+        } else if i < nx - 2 {
+            (3.0 * self.v[idx] + 6.0 * self.v[idx + 1] - self.v[idx + 2]) / 8.0
+        } else {
+            self.v[idx + 1]
+        }
+    }
+
+    #[inline(always)]
+    fn v_face_w_first_order(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * nx;
         let u_w = self.u[i + j * (nx + 1)];
-        match self.velocity_scheme {
-            VelocityScheme::FirstOrder => {
-                if u_w >= 0.0 {
-                    self.v[idx - 1]
-                } else {
-                    self.v[idx]
-                }
-            }
-            VelocityScheme::SecondOrder => {
-                if u_w >= 0.0 {
-                    if i > 1 {
-                        1.5 * self.v[idx - 1] - 0.5 * self.v[idx - 2]
-                    } else {
-                        self.v[idx - 1]
-                    }
-                } else if i < nx - 1 {
-                    1.5 * self.v[idx] - 0.5 * self.v[idx + 1]
-                } else {
-                    self.v[idx]
-                }
-            }
-            VelocityScheme::Quick => {
-                if u_w >= 0.0 {
-                    if i >= 3 {
-                        (-self.v[idx - 2] + 6.0 * self.v[idx - 1] + 3.0 * self.v[idx]) / 8.0
-                    } else {
-                        1.5 * self.v[idx - 1] - 0.5 * self.v[idx]
-                    }
-                } else {
-                    (3.0 * self.v[idx - 1] + 6.0 * self.v[idx] - self.v[idx + 1]) / 8.0
-                }
-            }
+        if u_w >= 0.0 {
+            self.v[idx - 1]
+        } else {
+            self.v[idx]
         }
     }
 
-    fn v_face_n(&self, i: usize, j: usize) -> f32 {
+    #[inline(always)]
+    fn v_face_w_second_order(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let u_w = self.u[i + j * (nx + 1)];
+        if u_w >= 0.0 {
+            if i > 1 {
+                1.5 * self.v[idx - 1] - 0.5 * self.v[idx - 2]
+            } else {
+                self.v[idx - 1]
+            }
+        } else if i < nx - 1 {
+            1.5 * self.v[idx] - 0.5 * self.v[idx + 1]
+        } else {
+            self.v[idx]
+        }
+    }
+
+    #[inline(always)]
+    fn v_face_w_quick(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let u_w = self.u[i + j * (nx + 1)];
+        if u_w >= 0.0 {
+            if i >= 3 {
+                (-self.v[idx - 2] + 6.0 * self.v[idx - 1] + 3.0 * self.v[idx]) / 8.0
+            } else {
+                1.5 * self.v[idx - 1] - 0.5 * self.v[idx]
+            }
+        } else {
+            (3.0 * self.v[idx - 1] + 6.0 * self.v[idx] - self.v[idx + 1]) / 8.0
+        }
+    }
+
+    #[inline(always)]
+    fn v_face_n_first_order(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * nx;
         let idx_n = i + (j + 1) * nx;
         let v_avg = 0.5 * (self.v[idx] + self.v[idx_n]);
-        match self.velocity_scheme {
-            VelocityScheme::FirstOrder => {
-                if v_avg >= 0.0 {
-                    self.v[idx]
-                } else {
-                    self.v[idx_n]
-                }
-            }
-            VelocityScheme::SecondOrder => {
-                if v_avg >= 0.0 {
-                    if j > 1 {
-                        1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx]
-                    } else {
-                        self.v[idx]
-                    }
-                } else if (i + (j + 2) * nx) < self.v.len() && j < self.grid.ny - 1 {
-                    1.5 * self.v[idx_n] - 0.5 * self.v[i + (j + 2) * nx]
-                } else {
-                    self.v[idx_n]
-                }
-            }
-            VelocityScheme::Quick => {
-                if v_avg >= 0.0 {
-                    if j >= 2 {
-                        (-self.v[i + (j - 1) * nx] + 6.0 * self.v[idx] + 3.0 * self.v[idx_n]) / 8.0
-                    } else {
-                        1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx]
-                    }
-                } else if j < self.grid.ny - 1 {
-                    (3.0 * self.v[idx] + 6.0 * self.v[idx_n] - self.v[i + (j + 2) * nx]) / 8.0
-                } else {
-                    self.v[idx_n]
-                }
-            }
+        if v_avg >= 0.0 {
+            self.v[idx]
+        } else {
+            self.v[idx_n]
         }
     }
 
-    fn v_face_s(&self, i: usize, j: usize) -> f32 {
+    #[inline(always)]
+    fn v_face_n_second_order(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let idx_n = i + (j + 1) * nx;
+        let v_avg = 0.5 * (self.v[idx] + self.v[idx_n]);
+        if v_avg >= 0.0 {
+            if j > 1 {
+                1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx]
+            } else {
+                self.v[idx]
+            }
+        } else if (i + (j + 2) * nx) < self.v.len() && j < self.grid.ny - 1 {
+            1.5 * self.v[idx_n] - 0.5 * self.v[i + (j + 2) * nx]
+        } else {
+            self.v[idx_n]
+        }
+    }
+
+    #[inline(always)]
+    fn v_face_n_quick(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let idx_n = i + (j + 1) * nx;
+        let v_avg = 0.5 * (self.v[idx] + self.v[idx_n]);
+        if v_avg >= 0.0 {
+            if j >= 2 {
+                (-self.v[i + (j - 1) * nx] + 6.0 * self.v[idx] + 3.0 * self.v[idx_n]) / 8.0
+            } else {
+                1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx]
+            }
+        } else if j < self.grid.ny - 1 {
+            (3.0 * self.v[idx] + 6.0 * self.v[idx_n] - self.v[i + (j + 2) * nx]) / 8.0
+        } else {
+            self.v[idx_n]
+        }
+    }
+
+    #[inline(always)]
+    fn v_face_s_first_order(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * nx;
         let idx_s = i + (j - 1) * nx;
         let v_avg = 0.5 * (self.v[idx_s] + self.v[idx]);
-        match self.velocity_scheme {
-            VelocityScheme::FirstOrder => {
-                if v_avg >= 0.0 {
-                    self.v[idx_s]
-                } else {
-                    self.v[idx]
-                }
+        if v_avg >= 0.0 {
+            self.v[idx_s]
+        } else {
+            self.v[idx]
+        }
+    }
+
+    #[inline(always)]
+    fn v_face_s_second_order(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let idx_s = i + (j - 1) * nx;
+        let v_avg = 0.5 * (self.v[idx_s] + self.v[idx]);
+        if v_avg >= 0.0 {
+            if j > 1 {
+                1.5 * self.v[idx_s] - 0.5 * self.v[i + (j - 2) * nx]
+            } else {
+                self.v[idx_s]
             }
-            VelocityScheme::SecondOrder => {
-                if v_avg >= 0.0 {
-                    if j > 1 {
-                        1.5 * self.v[idx_s] - 0.5 * self.v[i + (j - 2) * nx]
-                    } else {
-                        self.v[idx_s]
-                    }
-                } else if j < self.grid.ny {
-                    1.5 * self.v[idx] - 0.5 * self.v[i + (j + 1) * nx]
-                } else {
-                    self.v[idx]
-                }
+        } else if j < self.grid.ny {
+            1.5 * self.v[idx] - 0.5 * self.v[i + (j + 1) * nx]
+        } else {
+            self.v[idx]
+        }
+    }
+
+    #[inline(always)]
+    fn v_face_s_quick(&self, i: usize, j: usize) -> f32 {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let idx_s = i + (j - 1) * nx;
+        let v_avg = 0.5 * (self.v[idx_s] + self.v[idx]);
+        if v_avg >= 0.0 {
+            if j >= 2 {
+                (-self.v[i + (j - 2) * nx] + 6.0 * self.v[idx_s] + 3.0 * self.v[idx]) / 8.0
+            } else {
+                1.5 * self.v[idx_s] - 0.5 * self.v[idx]
             }
-            VelocityScheme::Quick => {
-                if v_avg >= 0.0 {
-                    if j >= 2 {
-                        (-self.v[i + (j - 2) * nx] + 6.0 * self.v[idx_s] + 3.0 * self.v[idx]) / 8.0
-                    } else {
-                        1.5 * self.v[idx_s] - 0.5 * self.v[idx]
-                    }
-                } else if j < self.grid.ny - 1 {
-                    (3.0 * self.v[idx_s] + 6.0 * self.v[idx] - self.v[i + (j + 1) * nx]) / 8.0
-                } else {
-                    self.v[idx]
-                }
-            }
+        } else if j < self.grid.ny - 1 {
+            (3.0 * self.v[idx_s] + 6.0 * self.v[idx] - self.v[i + (j + 1) * nx]) / 8.0
+        } else {
+            self.v[idx]
         }
     }
 
@@ -1050,6 +1236,7 @@ impl Model {
         thread::spawn(move || {
             let mut paused = false;
             loop {
+                let start = Instant::now();
                 let commands_in_queue = command_receiver.try_iter();
 
                 for command in commands_in_queue {
@@ -1075,6 +1262,7 @@ impl Model {
                 if !paused {
                     self.update();
                     residuals_sender.send(self.get_residuals()).unwrap();
+                    println!("Step time: {:?}", start.elapsed());
                 } else {
                     thread::sleep(Duration::from_millis(16));
                 }

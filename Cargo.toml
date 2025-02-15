@@ -8,3 +8,6 @@ eframe = "0.31.0"
 egui = "0.31.0"
 env_logger = "0.11.6"
 nalgebra = "0.33.2"
+
+[profile.release]
+debug = true
