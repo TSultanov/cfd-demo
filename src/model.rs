@@ -1,6 +1,112 @@
-use std::time::Instant;
+use std::{
+    sync::mpsc::{self, TryRecvError},
+    thread,
+    time::{Duration, Instant},
+};
 
-use nalgebra::DMatrix;
+#[derive(Clone)]
+pub struct SimulationParams {
+    pub dt: f32,
+    pub viscosity: f32,
+    pub target_inlet_velocity: f32,
+    pub velocity_scheme: VelocityScheme,
+    pub inlet_profile: InletProfile,
+    pub pressure_solver: PressureSolver,
+}
+
+pub struct Residuals {
+    pub simulation_step: usize,
+    pub simulation_time: f32,
+    pub dt: f32,
+    pub p: f32,
+    pub u: f32,
+    pub v: f32,
+}
+
+/// A snapshot structure to copy the data needed for visualization and logging.
+#[derive(Clone)]
+pub struct SimSnapshot {
+    pub p: Vec<f32>,
+    pub u: Vec<f32>,
+    pub v: Vec<f32>,
+    pub dt: f32,
+    pub paused: bool,
+}
+
+impl Default for SimulationParams {
+    fn default() -> Self {
+        Self {
+            dt: 0.5,
+            viscosity: 0.000001,
+            target_inlet_velocity: 1.0,
+            velocity_scheme: VelocityScheme::FirstOrder,
+            inlet_profile: InletProfile::Uniform,
+            pressure_solver: PressureSolver::Jacobi,
+        }
+    }
+}
+
+pub enum Command {
+    Stop,
+    GetSnapshot,
+    SetParams(SimulationParams),
+    Pause,
+    Resume,
+}
+
+pub struct SimulationControlHandle {
+    command_sender: mpsc::Sender<Command>,
+    snapshot_receiver: mpsc::Receiver<SimSnapshot>,
+    residuals_receiver: mpsc::Receiver<Residuals>,
+}
+
+impl SimulationControlHandle {
+    pub fn stop(&self) {
+        self.command_sender.send(Command::Stop).unwrap();
+    }
+
+    pub fn get_last_available_snapshot(&self) -> Option<SimSnapshot> {
+        let mut last_snapshot = None;
+        loop {
+            match self.snapshot_receiver.try_recv() {
+                Ok(snapshot) => last_snapshot = Some(snapshot),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        last_snapshot
+    }
+
+    pub fn get_new_log_messages(&self) -> Vec<Residuals> {
+        let mut last_residuals = vec![];
+        loop {
+            match self.residuals_receiver.try_recv() {
+                Ok(residuals) => last_residuals.push(residuals),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        last_residuals
+    }
+
+    pub fn request_snapshot(&self) {
+        self.command_sender.send(Command::GetSnapshot).unwrap();
+    }
+
+    pub fn set_params(&self, params: SimulationParams) {
+        self.command_sender
+            .send(Command::SetParams(params))
+            .unwrap();
+    }
+
+    pub fn pause(&self) {
+        self.command_sender.send(Command::Pause).unwrap();
+    }
+
+    pub fn resume(&self) {
+        self.command_sender.send(Command::Resume).unwrap();
+    }
+}
 
 /// A simple grid definition holding the number of pressure cells,
 /// as well as the physical dimensions and cell sizes.
@@ -90,25 +196,19 @@ pub struct Model {
     pub p_prime: Vec<f32>,
     pub p_prime_new: Vec<f32>,
 
-    /// Precomputed obstacle mask on the pressure grid (nx*ny).
-    pub obstacle: Vec<bool>,
-
     /// The last pressure residual (for time–step scaling).
     pub last_pressure_residual: f32,
     pub last_u_residual: f32,
     pub last_v_residual: f32,
+    pub simulation_time: f32,
 }
 
 impl Model {
     /// Create a new simulation model given a grid.
     /// (The field vectors are allocated based on grid dimensions.)
-    pub fn new(grid: Grid) -> Self {
+    pub fn new(grid: Grid, params: &SimulationParams) -> Self {
         let nx = grid.nx;
         let ny = grid.ny;
-
-        // Store local copies before moving grid into the struct.
-        let dx = grid.dx;
-        let dy = grid.dy;
 
         let size_u = (nx + 1) * ny;
         let size_v = nx * (ny + 1);
@@ -118,37 +218,18 @@ impl Model {
         let v = vec![0.0; size_v];
         let p = vec![0.0; size_p];
 
-        // Compute the obstacle mask from grid before moving it.
-        let obstacle_mask = if let Some(ref cyl) = grid.obstacle {
-            let mut mask = vec![false; size_p];
-            for j in 0..ny {
-                for i in 0..nx {
-                    let idx = i + j * nx;
-                    // Center of a pressure cell using local dx, dy:
-                    let x = (i as f32 + 0.5) * dx;
-                    let y = (j as f32 + 0.5) * dy;
-                    mask[idx] = ((x - cyl.center_x).powi(2) + (y - cyl.center_y).powi(2))
-                        .sqrt()
-                        <= cyl.radius;
-                }
-            }
-            mask
-        } else {
-            vec![false; size_p]
-        };
-
         Self {
             grid,
-            dt: 0.5,
-            nu: 0.000001,
+            dt: params.dt,
+            nu: params.viscosity,
             substep_count: 5,
             simulation_step: 0,
-            ramp_up_steps: 1000,
+            ramp_up_steps: 100,
             current_inlet_velocity: 0.0,
-            target_inlet_velocity: 1.0,
-            velocity_scheme: VelocityScheme::FirstOrder,
-            pressure_solver: PressureSolver::Jacobi,
-            inlet_profile: InletProfile::Uniform,
+            target_inlet_velocity: params.target_inlet_velocity,
+            velocity_scheme: params.velocity_scheme,
+            pressure_solver: params.pressure_solver,
+            inlet_profile: params.inlet_profile,
             u: u.clone(),
             v: v.clone(),
             p,
@@ -161,10 +242,10 @@ impl Model {
             rhs: vec![0.0; size_p],
             p_prime: vec![0.0; size_p],
             p_prime_new: vec![0.0; size_p],
-            obstacle: obstacle_mask,
             last_pressure_residual: 0.0,
             last_u_residual: 0.0,
             last_v_residual: 0.0,
+            simulation_time: 0.0,
         }
     }
 
@@ -176,10 +257,12 @@ impl Model {
         if self.simulation_step > 0 {
             let relaxation_factor = 0.5;
             for i in 0..self.u.len() {
-                self.u[i] = (1.0 + relaxation_factor) * self.u[i] - relaxation_factor * self.u_prev[i];
+                self.u[i] =
+                    (1.0 + relaxation_factor) * self.u[i] - relaxation_factor * self.u_prev[i];
             }
             for i in 0..self.v.len() {
-                self.v[i] = (1.0 + relaxation_factor) * self.v[i] - relaxation_factor * self.v_prev[i];
+                self.v[i] =
+                    (1.0 + relaxation_factor) * self.v[i] - relaxation_factor * self.v_prev[i];
             }
         }
 
@@ -189,8 +272,8 @@ impl Model {
 
         // Gradually ramp up inlet velocity.
         if self.simulation_step < self.ramp_up_steps {
-            self.current_inlet_velocity =
-                (self.simulation_step as f32 / self.ramp_up_steps as f32) * self.target_inlet_velocity;
+            self.current_inlet_velocity = (self.simulation_step as f32 / self.ramp_up_steps as f32)
+                * self.target_inlet_velocity;
         } else {
             self.current_inlet_velocity = self.target_inlet_velocity;
         }
@@ -201,7 +284,7 @@ impl Model {
         for _ in 0..self.substep_count {
             let start_time = Instant::now();
             self.piso_step(dt_sub);
-            let p_residual = self.get_last_pressure_residual();
+            let p_residual = self.last_pressure_residual;
             if p_residual > max_pressure_residual {
                 max_pressure_residual = p_residual;
             }
@@ -222,26 +305,29 @@ impl Model {
             .zip(self.v_old.iter())
             .map(|(new, old)| (new - old).abs())
             .fold(0.0_f32, |acc, delta| acc.max(delta));
-        
+
         // Store U and V residuals
         self.last_u_residual = max_residual_u;
         self.last_v_residual = max_residual_v;
-        
+
         self.simulation_step += 1;
 
         // Adjust the number of substeps if the error norm is too high.
-        let error_norm: f32 = max_residual_u.max(max_residual_v).max(max_pressure_residual);
+        let error_norm: f32 = max_residual_u
+            .max(max_residual_v)
+            .max(max_pressure_residual);
         let tolerance = 1e-3;
         if error_norm > tolerance {
             let factor = error_norm / tolerance;
-            self.substep_count =
-                ((self.substep_count as f32) * factor).ceil().min(20.0) as usize;
+            self.substep_count = ((self.substep_count as f32) * factor).ceil().min(20.0) as usize;
         } else if error_norm < tolerance / 10.0 && self.substep_count > 1 {
             self.substep_count = (self.substep_count as f32 / 2.0).floor() as usize;
             if self.substep_count < 1 {
                 self.substep_count = 1;
             }
         }
+
+        self.simulation_time += self.dt;
 
         // Automatic dt control (using a simple CFL condition).
         let previous_dt = self.dt;
@@ -305,7 +391,8 @@ impl Model {
                 let idx_e = idx + 1;
                 let idx_w = idx - 1;
                 let laplace = (self.u[idx_e] - 2.0 * self.u[idx] + self.u[idx_w]) / (dx * dx)
-                    + (self.u[i + (j + 1) * (nx + 1)] - 2.0 * self.u[idx] + self.u[i + (j - 1) * (nx + 1)])
+                    + (self.u[i + (j + 1) * (nx + 1)] - 2.0 * self.u[idx]
+                        + self.u[i + (j - 1) * (nx + 1)])
                         / (dy * dy);
                 self.u_star[idx] = self.u[idx] + dt_sub * (-convective + nu * laplace);
             }
@@ -330,7 +417,8 @@ impl Model {
                 let f_n = self.v_face_n(i, j) * self.v_face_n(i, j);
                 let f_s = self.v_face_s(i, j) * self.v_face_s(i, j);
                 let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
-                let laplace = (self.v[(i + 1) + j * nx] - 2.0 * self.v[idx] + self.v[(i - 1) + j * nx])
+                let laplace = (self.v[(i + 1) + j * nx] - 2.0 * self.v[idx]
+                    + self.v[(i - 1) + j * nx])
                     / (dx * dx)
                     + (self.v[i + (j + 1) * nx] - 2.0 * self.v[idx] + self.v[i + (j - 1) * nx])
                         / (dy * dy);
@@ -369,13 +457,14 @@ impl Model {
                         for i in 1..(nx - 1) {
                             let idx = i + j * nx;
                             let p_old = self.p_prime[idx];
-                            let p_update = ((self.p_prime[idx + 1] + self.p_prime[idx - 1]) / (dx * dx)
-                                + (self.p_prime[i + (j + 1) * nx] + self.p_prime[i + (j - 1) * nx])
+                            let p_update = ((self.p_prime[idx + 1] + self.p_prime[idx - 1])
+                                / (dx * dx)
+                                + (self.p_prime[i + (j + 1) * nx]
+                                    + self.p_prime[i + (j - 1) * nx])
                                     / (dy * dy)
                                 - self.rhs[idx])
                                 / denom;
-                            self.p_prime[idx] =
-                                (1.0 - sor_omega) * p_old + sor_omega * p_update;
+                            self.p_prime[idx] = (1.0 - sor_omega) * p_old + sor_omega * p_update;
                             let error = (self.p_prime[idx] - p_old).abs();
                             if error > max_error {
                                 max_error = error;
@@ -384,7 +473,8 @@ impl Model {
                     }
                     for i in 0..nx {
                         self.p_prime[i] = self.p_prime[i + nx]; // bottom
-                        self.p_prime[i + (ny - 1) * nx] = self.p_prime[i + (ny - 2) * nx]; // top
+                        self.p_prime[i + (ny - 1) * nx] = self.p_prime[i + (ny - 2) * nx];
+                        // top
                     }
                     for j in 0..ny {
                         self.p_prime[j * nx] = self.p_prime[1 + j * nx];
@@ -466,7 +556,8 @@ impl Model {
             }
             for i in 0..nx {
                 self.p_prime[i] = self.p_prime[i + nx]; // bottom
-                self.p_prime[i + (ny - 1) * nx] = self.p_prime[i + (ny - 2) * nx]; // top
+                self.p_prime[i + (ny - 1) * nx] = self.p_prime[i + (ny - 2) * nx];
+                // top
             }
             for j in 0..ny {
                 self.p_prime[j * nx] = self.p_prime[1 + j * nx]; // left
@@ -497,7 +588,11 @@ impl Model {
                     let center = self.grid.ly / 2.0;
                     let radius = self.grid.ly / 2.0;
                     let val = self.current_inlet_velocity * (1.0 - ((y - center) / radius).powi(2));
-                    if val < 0.0 { 0.0 } else { val }
+                    if val < 0.0 {
+                        0.0
+                    } else {
+                        val
+                    }
                 }
             };
             self.u[idx] = inlet_val;
@@ -572,13 +667,20 @@ impl Model {
             VelocityScheme::FirstOrder => {
                 let idx_e = idx + 1;
                 let u_avg_e = 0.5 * (self.u[idx] + self.u[idx_e]);
-                if u_avg_e >= 0.0 { self.u[idx] } else { self.u[idx_e] }
+                if u_avg_e >= 0.0 {
+                    self.u[idx]
+                } else {
+                    self.u[idx_e]
+                }
             }
             VelocityScheme::SecondOrder => {
                 let idx_e = idx + 1;
                 if self.u[idx] >= 0.0 {
-                    if i > 1 { 1.5 * self.u[idx] - 0.5 * self.u[idx - 1] }
-                    else { self.u[idx] }
+                    if i > 1 {
+                        1.5 * self.u[idx] - 0.5 * self.u[idx - 1]
+                    } else {
+                        self.u[idx]
+                    }
                 } else if (idx_e + 1) < self.u.len() && i < nx - 1 {
                     1.5 * self.u[idx_e] - 0.5 * self.u[idx_e + 1]
                 } else {
@@ -608,16 +710,26 @@ impl Model {
             VelocityScheme::FirstOrder => {
                 let idx_w = idx - 1;
                 let u_avg_w = 0.5 * (self.u[idx_w] + self.u[idx]);
-                if u_avg_w >= 0.0 { self.u[idx_w] } else { self.u[idx] }
+                if u_avg_w >= 0.0 {
+                    self.u[idx_w]
+                } else {
+                    self.u[idx]
+                }
             }
             VelocityScheme::SecondOrder => {
                 let idx_w = idx - 1;
                 if self.u[idx_w] >= 0.0 {
-                    if i > 2 { 1.5 * self.u[idx_w] - 0.5 * self.u[idx_w - 1] }
-                    else { self.u[idx_w] }
+                    if i > 2 {
+                        1.5 * self.u[idx_w] - 0.5 * self.u[idx_w - 1]
+                    } else {
+                        self.u[idx_w]
+                    }
                 } else {
-                    if i < nx { 1.5 * self.u[idx] - 0.5 * self.u[idx + 1] }
-                    else { self.u[idx] }
+                    if i < nx {
+                        1.5 * self.u[idx] - 0.5 * self.u[idx + 1]
+                    } else {
+                        self.u[idx]
+                    }
                 }
             }
             VelocityScheme::Quick => {
@@ -641,20 +753,30 @@ impl Model {
         let v_n = self.get_v_north(i, j);
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
-                if v_n >= 0.0 { self.u[idx] } else { self.u[idx_n] }
+                if v_n >= 0.0 {
+                    self.u[idx]
+                } else {
+                    self.u[idx_n]
+                }
             }
             VelocityScheme::SecondOrder => {
                 if v_n >= 0.0 {
-                    if j > 1 { 1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)] }
-                    else { self.u[idx] }
+                    if j > 1 {
+                        1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)]
+                    } else {
+                        self.u[idx]
+                    }
                 } else if (i + (j + 2) * (nx + 1)) < self.u.len() && j < self.grid.ny - 1 {
                     1.5 * self.u[idx_n] - 0.5 * self.u[i + (j + 2) * (nx + 1)]
-                } else { self.u[idx_n] }
+                } else {
+                    self.u[idx_n]
+                }
             }
             VelocityScheme::Quick => {
                 if v_n >= 0.0 {
                     if j >= 2 {
-                        (-self.u[i + (j - 1) * (nx + 1)] + 6.0 * self.u[idx] + 3.0 * self.u[idx_n]) / 8.0
+                        (-self.u[i + (j - 1) * (nx + 1)] + 6.0 * self.u[idx] + 3.0 * self.u[idx_n])
+                            / 8.0
                     } else {
                         1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)]
                     }
@@ -674,20 +796,30 @@ impl Model {
         let v_s = self.get_v_south(i, j);
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
-                if v_s >= 0.0 { self.u[idx_s] } else { self.u[idx] }
+                if v_s >= 0.0 {
+                    self.u[idx_s]
+                } else {
+                    self.u[idx]
+                }
             }
             VelocityScheme::SecondOrder => {
                 if v_s >= 0.0 {
-                    if j > 1 { 1.5 * self.u[idx_s] - 0.5 * self.u[i + (j - 2) * (nx + 1)] }
-                    else { self.u[idx_s] }
+                    if j > 1 {
+                        1.5 * self.u[idx_s] - 0.5 * self.u[i + (j - 2) * (nx + 1)]
+                    } else {
+                        self.u[idx_s]
+                    }
                 } else if j < self.grid.ny {
                     1.5 * self.u[idx] - 0.5 * self.u[i + (j + 1) * (nx + 1)]
-                } else { self.u[idx] }
+                } else {
+                    self.u[idx]
+                }
             }
             VelocityScheme::Quick => {
                 if v_s >= 0.0 {
                     if j >= 2 {
-                        (-self.u[i + (j - 2) * (nx + 1)] + 6.0 * self.u[idx_s] + 3.0 * self.u[idx]) / 8.0
+                        (-self.u[i + (j - 2) * (nx + 1)] + 6.0 * self.u[idx_s] + 3.0 * self.u[idx])
+                            / 8.0
                     } else {
                         1.5 * self.u[idx_s] - 0.5 * self.u[idx]
                     }
@@ -722,20 +854,32 @@ impl Model {
         let u_e = self.u[(i + 1) + j * (nx + 1)];
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
-                if u_e >= 0.0 { self.v[idx] } else { self.v[idx + 1] }
+                if u_e >= 0.0 {
+                    self.v[idx]
+                } else {
+                    self.v[idx + 1]
+                }
             }
             VelocityScheme::SecondOrder => {
                 if u_e >= 0.0 {
-                    if i > 0 { 1.5 * self.v[idx] - 0.5 * self.v[idx - 1] } else { self.v[idx] }
+                    if i > 0 {
+                        1.5 * self.v[idx] - 0.5 * self.v[idx - 1]
+                    } else {
+                        self.v[idx]
+                    }
                 } else if (idx + 2) < self.v.len() && i < nx - 2 {
                     1.5 * self.v[idx + 1] - 0.5 * self.v[idx + 2]
-                } else { self.v[idx + 1] }
+                } else {
+                    self.v[idx + 1]
+                }
             }
             VelocityScheme::Quick => {
                 if u_e >= 0.0 {
                     if i >= 2 {
                         (-self.v[idx - 1] + 6.0 * self.v[idx] + 3.0 * self.v[idx + 1]) / 8.0
-                    } else { 1.5 * self.v[idx] - 0.5 * self.v[idx - 1] }
+                    } else {
+                        1.5 * self.v[idx] - 0.5 * self.v[idx - 1]
+                    }
                 } else if i < nx - 2 {
                     (3.0 * self.v[idx] + 6.0 * self.v[idx + 1] - self.v[idx + 2]) / 8.0
                 } else {
@@ -751,20 +895,32 @@ impl Model {
         let u_w = self.u[i + j * (nx + 1)];
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
-                if u_w >= 0.0 { self.v[idx - 1] } else { self.v[idx] }
+                if u_w >= 0.0 {
+                    self.v[idx - 1]
+                } else {
+                    self.v[idx]
+                }
             }
             VelocityScheme::SecondOrder => {
                 if u_w >= 0.0 {
-                    if i > 1 { 1.5 * self.v[idx - 1] - 0.5 * self.v[idx - 2] } else { self.v[idx - 1] }
+                    if i > 1 {
+                        1.5 * self.v[idx - 1] - 0.5 * self.v[idx - 2]
+                    } else {
+                        self.v[idx - 1]
+                    }
                 } else if i < nx - 1 {
                     1.5 * self.v[idx] - 0.5 * self.v[idx + 1]
-                } else { self.v[idx] }
+                } else {
+                    self.v[idx]
+                }
             }
             VelocityScheme::Quick => {
                 if u_w >= 0.0 {
                     if i >= 3 {
                         (-self.v[idx - 2] + 6.0 * self.v[idx - 1] + 3.0 * self.v[idx]) / 8.0
-                    } else { 1.5 * self.v[idx - 1] - 0.5 * self.v[idx] }
+                    } else {
+                        1.5 * self.v[idx - 1] - 0.5 * self.v[idx]
+                    }
                 } else {
                     (3.0 * self.v[idx - 1] + 6.0 * self.v[idx] - self.v[idx + 1]) / 8.0
                 }
@@ -779,21 +935,32 @@ impl Model {
         let v_avg = 0.5 * (self.v[idx] + self.v[idx_n]);
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
-                if v_avg >= 0.0 { self.v[idx] } else { self.v[idx_n] }
+                if v_avg >= 0.0 {
+                    self.v[idx]
+                } else {
+                    self.v[idx_n]
+                }
             }
             VelocityScheme::SecondOrder => {
                 if v_avg >= 0.0 {
-                    if j > 1 { 1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx] }
-                    else { self.v[idx] }
+                    if j > 1 {
+                        1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx]
+                    } else {
+                        self.v[idx]
+                    }
                 } else if (i + (j + 2) * nx) < self.v.len() && j < self.grid.ny - 1 {
                     1.5 * self.v[idx_n] - 0.5 * self.v[i + (j + 2) * nx]
-                } else { self.v[idx_n] }
+                } else {
+                    self.v[idx_n]
+                }
             }
             VelocityScheme::Quick => {
                 if v_avg >= 0.0 {
                     if j >= 2 {
                         (-self.v[i + (j - 1) * nx] + 6.0 * self.v[idx] + 3.0 * self.v[idx_n]) / 8.0
-                    } else { 1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx] }
+                    } else {
+                        1.5 * self.v[idx] - 0.5 * self.v[i + (j - 1) * nx]
+                    }
                 } else if j < self.grid.ny - 1 {
                     (3.0 * self.v[idx] + 6.0 * self.v[idx_n] - self.v[i + (j + 2) * nx]) / 8.0
                 } else {
@@ -810,21 +977,32 @@ impl Model {
         let v_avg = 0.5 * (self.v[idx_s] + self.v[idx]);
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
-                if v_avg >= 0.0 { self.v[idx_s] } else { self.v[idx] }
+                if v_avg >= 0.0 {
+                    self.v[idx_s]
+                } else {
+                    self.v[idx]
+                }
             }
             VelocityScheme::SecondOrder => {
                 if v_avg >= 0.0 {
-                    if j > 1 { 1.5 * self.v[idx_s] - 0.5 * self.v[i + (j - 2) * nx] }
-                    else { self.v[idx_s] }
+                    if j > 1 {
+                        1.5 * self.v[idx_s] - 0.5 * self.v[i + (j - 2) * nx]
+                    } else {
+                        self.v[idx_s]
+                    }
                 } else if j < self.grid.ny {
                     1.5 * self.v[idx] - 0.5 * self.v[i + (j + 1) * nx]
-                } else { self.v[idx] }
+                } else {
+                    self.v[idx]
+                }
             }
             VelocityScheme::Quick => {
                 if v_avg >= 0.0 {
                     if j >= 2 {
                         (-self.v[i + (j - 2) * nx] + 6.0 * self.v[idx_s] + 3.0 * self.v[idx]) / 8.0
-                    } else { 1.5 * self.v[idx_s] - 0.5 * self.v[idx] }
+                    } else {
+                        1.5 * self.v[idx_s] - 0.5 * self.v[idx]
+                    }
                 } else if j < self.grid.ny - 1 {
                     (3.0 * self.v[idx_s] + 6.0 * self.v[idx] - self.v[i + (j + 1) * nx]) / 8.0
                 } else {
@@ -834,58 +1012,79 @@ impl Model {
         }
     }
 
-    // ----- Methods for setting simulation parameters -----
-    pub fn set_dt(&mut self, dt: f32) {
-        self.dt = dt;
-    }
-    pub fn set_viscosity(&mut self, nu: f32) {
-        self.nu = nu;
-    }
-    pub fn set_target_inlet_velocity(&mut self, velocity: f32) {
-        self.target_inlet_velocity = velocity;
-    }
-    pub fn set_velocity_scheme(&mut self, scheme: VelocityScheme) {
-        self.velocity_scheme = scheme;
-    }
-    pub fn set_pressure_solver(&mut self, solver: PressureSolver) {
-        self.pressure_solver = solver;
-    }
-    pub fn set_inlet_profile(&mut self, profile: InletProfile) {
-        self.inlet_profile = profile;
+    pub fn set_parameters(&mut self, params: &SimulationParams) {
+        self.nu = params.viscosity;
+        self.dt = params.dt;
+        self.target_inlet_velocity = params.target_inlet_velocity;
+        self.velocity_scheme = params.velocity_scheme;
+        self.pressure_solver = params.pressure_solver;
+        self.inlet_profile = params.inlet_profile;
     }
 
-    // ----- Methods for retrieving the current state -----
-    /// Returns a reference to the pressure field.
-    pub fn get_pressure(&self) -> &[f32] {
-        &self.p
-    }
-    /// Returns a reference to the horizontal velocity field (u).
-    pub fn get_u(&self) -> &[f32] {
-        &self.u
-    }
-    /// Returns a reference to the vertical velocity field (v).
-    pub fn get_v(&self) -> &[f32] {
-        &self.v
+    pub fn get_snapshot(&self) -> SimSnapshot {
+        SimSnapshot {
+            u: self.u.clone(),
+            v: self.v.clone(),
+            p: self.p.clone(),
+            dt: self.dt,
+            paused: false,
+        }
     }
 
-    /// Returns the last computed pressure residual.
-    pub fn get_last_pressure_residual(&self) -> f32 {
-        self.last_pressure_residual
+    pub fn get_residuals(&self) -> Residuals {
+        Residuals {
+            simulation_step: self.simulation_step,
+            simulation_time: self.simulation_time,
+            dt: self.dt,
+            u: self.last_u_residual,
+            v: self.last_v_residual,
+            p: self.last_pressure_residual,
+        }
     }
 
-    /// Returns the last computed U residual.
-    pub fn get_last_u_residual(&self) -> f32 {
-        self.last_u_residual
-    }
+    pub fn run(mut self) -> SimulationControlHandle {
+        let (command_sender, command_receiver) = mpsc::channel();
+        let (snapshot_sender, snapshot_receiver) = mpsc::channel();
+        let (residuals_sender, residuals_receiver) = mpsc::channel();
 
-    /// Returns the last computed V residual.
-    pub fn get_last_v_residual(&self) -> f32 {
-        self.last_v_residual
-    }
+        thread::spawn(move || {
+            let mut paused = false;
+            loop {
+                let commands_in_queue = command_receiver.try_iter();
 
-    /// Optionally, convert the pressure field into a nalgebra DMatrix.
-    pub fn pressure_as_matrix(&self) -> DMatrix<f32> {
-        DMatrix::from_vec(self.grid.ny, self.grid.nx, self.p.clone())
+                for command in commands_in_queue {
+                    match command {
+                        Command::Stop => break,
+                        Command::SetParams(params) => {
+                            self.set_parameters(&params);
+                        }
+                        Command::GetSnapshot => {
+                            let mut snapshot = self.get_snapshot();
+                            snapshot.paused = paused;
+                            snapshot_sender.send(snapshot).unwrap();
+                        }
+                        Command::Pause => {
+                            paused = true;
+                        }
+                        Command::Resume => {
+                            paused = false;
+                        }
+                    }
+                }
+
+                if !paused {
+                    self.update();
+                    residuals_sender.send(self.get_residuals()).unwrap();
+                } else {
+                    thread::sleep(Duration::from_millis(16));
+                }
+            }
+        });
+
+        SimulationControlHandle {
+            residuals_receiver,
+            command_sender,
+            snapshot_receiver,
+        }
     }
 }
-
