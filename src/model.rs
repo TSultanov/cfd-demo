@@ -877,28 +877,77 @@ impl Model {
         println!("corrector time: {:?}", corrector_time);
 
         // ---------------- Corrector Step ----------------
+        let start = Instant::now();
         // Correct u
         for j in 0..ny {
-            for i in 1..nx {
-                let idx = i + j * (nx + 1);
-                let p_right = self.p_prime[i + j * nx];
-                let p_left = self.p_prime[i.saturating_sub(1) + j * nx];
-                self.u[idx] = self.u_star[idx] - dt_sub * (p_right - p_left) / dx;
+            for i in (1..nx).step_by(LANES) {
+                if i + LANES > nx {
+                    for k in 0..(nx - i) {
+                        let idx = i + k + j * (nx + 1);
+                        let p_right = self.p_prime[i + k + j * nx];
+                        let p_left = self.p_prime[i.saturating_sub(1) + k + j * nx];
+                        self.u[idx] = self.u_star[idx] - dt_sub * (p_right - p_left) / dx;
+                    }
+                    continue;
+                }
+
+                let idx_u = i + j * (nx + 1);
+                let idx_p = i + j * nx;
+                let left_offset = i.saturating_sub(1) + j * nx;
+
+                let p_right = Simd::<f32, LANES>::from_slice(&self.p_prime[idx_p..idx_p + LANES]);
+                let p_left = Simd::<f32, LANES>::from_slice(&self.p_prime[left_offset..left_offset + LANES]);
+                let dt_sub_v = Simd::splat(dt_sub);
+                let dx_v = Simd::splat(dx);
+                let correction = dt_sub_v * ((p_right - p_left) / dx_v);
+
+                let u_star = Simd::<f32, LANES>::from_slice(&self.u_star[idx_u..idx_u + LANES]);
+                let result = u_star - correction;
+                result.copy_to_slice(&mut self.u[idx_u..idx_u + LANES]);
             }
         }
         // Correct v
         for j in 1..ny {
-            for i in 0..nx {
+            for i in (0..nx).step_by(LANES) {
+                if i + LANES > nx {
+                    for k in 0..(nx - i) {
+                        let idx = i + k + j * nx;
+                        let p_top = self.p_prime[i + k + j * nx];
+                        let p_bottom = self.p_prime[i + k + (j - 1) * nx];
+                        self.v[idx] = self.v_star[idx] - dt_sub * (p_top - p_bottom) / dy;
+                    }
+                    continue;
+                }
+
                 let idx = i + j * nx;
-                let p_top = self.p_prime[i + j * nx];
-                let p_bottom = self.p_prime[i + (j.saturating_sub(1)) * nx];
-                self.v[idx] = self.v_star[idx] - dt_sub * (p_top - p_bottom) / dy;
+                let p_top = Simd::<f32, LANES>::from_slice(&self.p_prime[idx..idx + LANES]);
+                let bottom_idx = i + (j.saturating_sub(1)) * nx;
+                let p_bottom = Simd::<f32, LANES>::from_slice(&self.p_prime[bottom_idx..bottom_idx + LANES]);
+                let dt_sub_v = Simd::splat(dt_sub);
+                let dy_v = Simd::splat(dy);
+                let v_star = Simd::<f32, LANES>::from_slice(&self.v_star[idx..idx + LANES]);
+                let correction = dt_sub_v * ((p_top - p_bottom) / dy_v);
+                let v_new = v_star - correction;
+                v_new.copy_to_slice(&mut self.v[idx..idx + LANES]);
             }
         }
+        println!("velocity corrector time: {:?}", start.elapsed());
         // Accumulate the pressure correction
-        for i in 0..self.p.len() {
-            self.p[i] += self.p_prime[i];
+        let start = Instant::now();
+        for i in (0..self.p.len()).step_by(LANES) {
+            if i + LANES > self.p.len() {
+                for k in 0..(self.p.len() - i) {
+                    self.p[i + k] += self.p_prime[i + k];
+                }
+                continue;
+            }
+
+            let p_prime: Simd<f32, LANES> = Simd::from_slice(&self.p_prime[i..i + LANES]);
+            let p = Simd::from_slice(&self.p[i..i + LANES]);
+            let p_new = p + p_prime;
+            p_new.copy_to_slice(&mut self.p[i..i + LANES]);
         }
+        println!("pressure correcttion accumulation time: {:?}", start.elapsed());
 
         // Enforce boundary conditions
         let start = Instant::now();
