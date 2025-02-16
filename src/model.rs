@@ -409,12 +409,18 @@ impl Model {
                         let idx = i + j * (nx + 1);
                         let idx_end = (i + LANES) + j * (nx + 1);
 
-                        self.get_v_north(i, j).copy_to_slice(&mut self.u_v_n[idx..idx_end]);
-                        self.get_v_south(i, j).copy_to_slice(&mut self.u_v_s[idx..idx_end]);
-                        self.u_face_n_first_order(i, j).copy_to_slice(&mut self.u_u_n[idx..idx_end]);
-                        self.u_face_s_first_order(i, j).copy_to_slice(&mut self.u_u_s[idx..idx_end]);
-                        self.u_face_e_first_order(i, j).copy_to_slice(&mut self.u_u_e[idx..idx_end]);
-                        self.u_face_w_first_order(i, j).copy_to_slice(&mut self.u_u_w[idx..idx_end]);
+                        self.get_v_north(i, j)
+                            .copy_to_slice(&mut self.u_v_n[idx..idx_end]);
+                        self.get_v_south(i, j)
+                            .copy_to_slice(&mut self.u_v_s[idx..idx_end]);
+                        self.u_face_n_first_order(i, j)
+                            .copy_to_slice(&mut self.u_u_n[idx..idx_end]);
+                        self.u_face_s_first_order(i, j)
+                            .copy_to_slice(&mut self.u_u_s[idx..idx_end]);
+                        self.u_face_e_first_order(i, j)
+                            .copy_to_slice(&mut self.u_u_e[idx..idx_end]);
+                        self.u_face_w_first_order(i, j)
+                            .copy_to_slice(&mut self.u_u_w[idx..idx_end]);
                     }
                 }
             }
@@ -424,17 +430,18 @@ impl Model {
                         let idx = i + j * (nx + 1);
                         let idx_end = (i + LANES) + j * (nx + 1);
 
-                        self.get_v_north(i, j).copy_to_slice(&mut self.u_v_n[idx..idx_end]);
-                        self.get_v_south(i, j).copy_to_slice(&mut self.u_v_s[idx..idx_end]);
-                        self.u_face_n_second_order(i, j).copy_to_slice(&mut self.u_u_n[idx..idx_end]);
-                        self.u_face_s_second_order(i, j).copy_to_slice(&mut self.u_u_s[idx..idx_end]);
-                        self.u_face_e_second_order(i, j).copy_to_slice(&mut self.u_u_e[idx..idx_end]);
-
-                        for k in 0..LANES {
-                            let idx = (i + k) + j * (nx + 1);
-
-                            self.u_u_w[idx] = self.u_face_w_second_order(i+k, j);
-                        }
+                        self.get_v_north(i, j)
+                            .copy_to_slice(&mut self.u_v_n[idx..idx_end]);
+                        self.get_v_south(i, j)
+                            .copy_to_slice(&mut self.u_v_s[idx..idx_end]);
+                        self.u_face_n_second_order(i, j)
+                            .copy_to_slice(&mut self.u_u_n[idx..idx_end]);
+                        self.u_face_s_second_order(i, j)
+                            .copy_to_slice(&mut self.u_u_s[idx..idx_end]);
+                        self.u_face_e_second_order(i, j)
+                            .copy_to_slice(&mut self.u_u_e[idx..idx_end]);
+                        self.u_face_w_second_order(i, j)
+                            .copy_to_slice(&mut self.u_u_w[idx..idx_end]);
                     }
                 }
             }
@@ -444,10 +451,14 @@ impl Model {
                         let idx = i + j * (nx + 1);
                         let idx_end = (i + LANES) + j * (nx + 1);
 
-                        self.get_v_north(i, j).copy_to_slice(&mut self.u_v_n[idx..idx_end]);
-                        self.get_v_south(i, j).copy_to_slice(&mut self.u_v_s[idx..idx_end]);
-                        self.u_face_n_quick(i, j).copy_to_slice(&mut self.u_u_n[idx..idx_end]);
-                        self.u_face_s_quick(i, j).copy_to_slice(&mut self.u_u_s[idx..idx_end]);
+                        self.get_v_north(i, j)
+                            .copy_to_slice(&mut self.u_v_n[idx..idx_end]);
+                        self.get_v_south(i, j)
+                            .copy_to_slice(&mut self.u_v_s[idx..idx_end]);
+                        self.u_face_n_quick(i, j)
+                            .copy_to_slice(&mut self.u_u_n[idx..idx_end]);
+                        self.u_face_s_quick(i, j)
+                            .copy_to_slice(&mut self.u_u_s[idx..idx_end]);
 
                         for k in 0..LANES {
                             let idx = (i + k) + j * (nx + 1);
@@ -503,13 +514,13 @@ impl Model {
                     for i in (1..(nx - 1)).step_by(LANES) {
                         let idx = i + j * nx;
                         let idx_end = (i + LANES) + j * nx;
-                        
+
                         if i + LANES > nx - 1 {
                             for k in 0..(nx - i) {
                                 let idx = i + k + j * nx;
                                 self.v_u_e[idx] = self.u[(i + k + 1) + j * (nx + 1)];
                                 self.v_u_w[idx] = self.u[i + k + j * (nx + 1)];
-        
+
                                 self.v_v_n[idx] = self.v_face_n_first_order_scalar(i + k, j);
                                 self.v_v_s[idx] = self.v_face_s_first_order_scalar(i + k, j);
                                 self.v_v_e[idx] = self.v_face_e_first_order_scalar(i + k, j);
@@ -518,13 +529,20 @@ impl Model {
                             continue;
                         }
 
-                        self.v_u_e[idx..idx_end].copy_from_slice(&self.u[(i + 1) + j * (nx + 1)..(i + LANES + 1) + j * (nx + 1)]);
-                        self.v_u_w[idx..idx_end].copy_from_slice(&self.u[i + j * (nx + 1)..i + LANES + j * (nx + 1)]);
+                        self.v_u_e[idx..idx_end].copy_from_slice(
+                            &self.u[(i + 1) + j * (nx + 1)..(i + LANES + 1) + j * (nx + 1)],
+                        );
+                        self.v_u_w[idx..idx_end]
+                            .copy_from_slice(&self.u[i + j * (nx + 1)..i + LANES + j * (nx + 1)]);
 
-                        self.v_face_n_first_order(i, j).copy_to_slice(&mut self.v_v_n[idx..idx_end]);
-                        self.v_face_s_first_order(i, j).copy_to_slice(&mut self.v_v_s[idx..idx_end]);
-                        self.v_face_e_first_order(i, j).copy_to_slice(&mut self.v_v_e[idx..idx_end]);
-                        self.v_face_w_first_order(i, j).copy_to_slice(&mut self.v_v_w[idx..idx_end]);
+                        self.v_face_n_first_order(i, j)
+                            .copy_to_slice(&mut self.v_v_n[idx..idx_end]);
+                        self.v_face_s_first_order(i, j)
+                            .copy_to_slice(&mut self.v_v_s[idx..idx_end]);
+                        self.v_face_e_first_order(i, j)
+                            .copy_to_slice(&mut self.v_v_e[idx..idx_end]);
+                        self.v_face_w_first_order(i, j)
+                            .copy_to_slice(&mut self.v_v_w[idx..idx_end]);
                     }
                 }
             }
@@ -539,7 +557,7 @@ impl Model {
                                 let idx = i + k + j * nx;
                                 self.v_u_e[idx] = self.u[(i + k + 1) + j * (nx + 1)];
                                 self.v_u_w[idx] = self.u[i + k + j * (nx + 1)];
-        
+
                                 self.v_v_n[idx] = self.v_face_n_second_order(i + k, j);
                                 self.v_v_s[idx] = self.v_face_s_second_order(i + k, j);
                                 self.v_v_e[idx] = self.v_face_e_second_order(i + k, j);
@@ -548,8 +566,11 @@ impl Model {
                             continue;
                         }
 
-                        self.v_u_e[idx..idx_end].copy_from_slice(&self.u[(i + 1) + j * (nx + 1)..(i + LANES + 1) + j * (nx + 1)]);
-                        self.v_u_w[idx..idx_end].copy_from_slice(&self.u[i + j * (nx + 1)..i + LANES + j * (nx + 1)]);
+                        self.v_u_e[idx..idx_end].copy_from_slice(
+                            &self.u[(i + 1) + j * (nx + 1)..(i + LANES + 1) + j * (nx + 1)],
+                        );
+                        self.v_u_w[idx..idx_end]
+                            .copy_from_slice(&self.u[i + j * (nx + 1)..i + LANES + j * (nx + 1)]);
 
                         for k in 0..LANES {
                             let idx = (i + k) + j * nx;
@@ -673,7 +694,7 @@ impl Model {
                 self.last_pressure_residual = max_error;
             }
             PressureSolver::Jacobi => {
-                let residual = self.jacobi_pressure( dx, dy, nx, ny);
+                let residual = self.jacobi_pressure(dx, dy, nx, ny);
                 self.last_pressure_residual = residual;
             }
         }
@@ -751,21 +772,25 @@ impl Model {
                     }
 
                     // Load neighbor values into SIMD vectors.
-                    let right: Simd<f32, LANES> = Simd::from_slice(&self.p_prime[(stride + 1)..(stride + 1 + LANES)]);
-                    let left  = Simd::from_slice(&self.p_prime[(stride - 1)..(stride - 1 + LANES)]);
-                    let top   = Simd::from_slice(&self.p_prime[(i + (j + 1) * nx)..(i + (j + 1) * nx + LANES)]);
-                    let bot   = Simd::from_slice(&self.p_prime[(i + (j - 1) * nx)..(i + (j - 1) * nx + LANES)]);
+                    let right: Simd<f32, LANES> =
+                        Simd::from_slice(&self.p_prime[(stride + 1)..(stride + 1 + LANES)]);
+                    let left = Simd::from_slice(&self.p_prime[(stride - 1)..(stride - 1 + LANES)]);
+                    let top = Simd::from_slice(
+                        &self.p_prime[(i + (j + 1) * nx)..(i + (j + 1) * nx + LANES)],
+                    );
+                    let bot = Simd::from_slice(
+                        &self.p_prime[(i + (j - 1) * nx)..(i + (j - 1) * nx + LANES)],
+                    );
                     let center = Simd::from_slice(&self.p_prime[stride..(stride + LANES)]);
-                    let rhs    = Simd::from_slice(&self.rhs[stride..(stride + LANES)]);
+                    let rhs = Simd::from_slice(&self.rhs[stride..(stride + LANES)]);
 
                     // Compute the update using SIMD operations.
                     let horizontal = (right + left) / dx_sq_v;
-                    let vertical   = (top + bot) / dy_sq_v;
+                    let vertical = (top + bot) / dy_sq_v;
                     let p_update = (horizontal + vertical - rhs) / denom_v;
 
                     // Apply relaxation parameter.
-                    let new_val = jacobi_omega_v * p_update
-                        + jacobi_omega_o_m_v * center;
+                    let new_val = jacobi_omega_v * p_update + jacobi_omega_o_m_v * center;
 
                     let error = (new_val - center).abs().reduce_max();
                     if error > max_error {
@@ -781,7 +806,8 @@ impl Model {
 
             for i in 0..nx {
                 self.p_prime[i] = self.p_prime[i + nx]; // bottom
-                self.p_prime[i + (ny - 1) * nx] = self.p_prime[i + (ny - 2) * nx]; // top
+                self.p_prime[i + (ny - 1) * nx] = self.p_prime[i + (ny - 2) * nx];
+                // top
             }
             for j in 0..ny {
                 self.p_prime[j * nx] = self.p_prime[1 + j * nx]; // left
@@ -888,14 +914,14 @@ impl Model {
         let nx = self.grid.nx;
         let idx_left = i + j * (nx + 1);
         let idx_right = (i + 1) + j * (nx + 1);
-        
+
         // Load LANES values for left and right faces.
         let u_left = Simd::from_slice(&self.u[idx_left..idx_left + LANES]);
         let u_right = Simd::from_slice(&self.u[idx_right..idx_right + LANES]);
-        
+
         // Compute average using SIMD operations.
         let u_avg = (u_left + u_right) * Simd::splat(0.5);
-        
+
         // Create mask: if average is >= 0.0, choose u_left, else choose u_right.
         let mask = u_avg.simd_ge(Simd::splat(0.0));
         mask.select(u_left, u_right)
@@ -916,12 +942,22 @@ impl Model {
         let u_east_east = Simd::from_slice(&self.u[idx_ee..idx_ee + LANES]);
 
         // Preselect 1.5 * u[idx] - 0.5 * self.u[idx_w] if i > 1, else u[idx].
-        let mask_i: Mask<i32, LANES> = Simd::from_slice(&(i..i+LANES).collect::<Vec<_>>()).simd_gt(Simd::splat(1)).into();
-        let u_a = mask_i.select(Simd::splat(1.5) * u_current - Simd::splat(0.5) * u_west, u_current);
+        let mask_i: Mask<i32, LANES> = Simd::from_slice(&(i..i + LANES).collect::<Vec<_>>())
+            .simd_gt(Simd::splat(1))
+            .into();
+        let u_a = mask_i.select(
+            Simd::splat(1.5) * u_current - Simd::splat(0.5) * u_west,
+            u_current,
+        );
 
         // Preselect 1.5 * u[idx_e] - 0.5 * u[idx_ee] if i < nx - 1, else self.u[idx_e]
-        let mask_i: Mask<i32, LANES> = Simd::from_slice(&(i..i+LANES).collect::<Vec<_>>()).simd_lt(Simd::splat(nx - 1)).into();
-        let u_b = mask_i.select(Simd::splat(1.5) * u_east - Simd::splat(0.5) * u_east_east, u_east);
+        let mask_i: Mask<i32, LANES> = Simd::from_slice(&(i..i + LANES).collect::<Vec<_>>())
+            .simd_lt(Simd::splat(nx - 1))
+            .into();
+        let u_b = mask_i.select(
+            Simd::splat(1.5) * u_east - Simd::splat(0.5) * u_east_east,
+            u_east,
+        );
 
         // If u_currect >= 0.0, then u_a, else u_b.
         let mask = u_a.simd_ge(Simd::splat(0.0));
@@ -961,25 +997,36 @@ impl Model {
     }
 
     #[inline(always)]
-    fn u_face_w_second_order(&self, i: usize, j: usize) -> f32 {
+    fn u_face_w_second_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
         let idx_w = (i - 1) + j * (nx + 1);
         let idx_ww = (i - 2) + j * (nx + 1);
         let idx_e = (i + 1) + j * (nx + 1);
-        if self.u[idx_w] >= 0.0 {
-            if i > 2 {
-                1.5 * self.u[idx_w] - 0.5 * self.u[idx_ww]
-            } else {
-                self.u[idx_w]
-            }
-        } else {
-            if i < nx {
-                1.5 * self.u[idx] - 0.5 * self.u[idx_e]
-            } else {
-                self.u[idx]
-            }
-        }
+
+        let u_current = Simd::from_slice(&self.u[idx..idx + LANES]);
+        let u_w = Simd::from_slice(&self.u[idx_w..idx_w + LANES]);
+        let u_ww = Simd::from_slice(&self.u[idx_ww..idx_ww + LANES]);
+        let u_e = Simd::from_slice(&self.u[idx_e..idx_e + LANES]);
+
+        // For west branch: if u_w >= 0.0, use second order if valid (i > 2), else fallback to u_w.
+        let mask_w_valid: Mask<i32, LANES> = Simd::from_slice(&(i..i + LANES).collect::<Vec<_>>())
+            .simd_gt(Simd::splat(2))
+            .into();
+        let candidate_left =
+            mask_w_valid.select(Simd::splat(1.5) * u_w - Simd::splat(0.5) * u_ww, u_w);
+
+        // For east branch: if u_w < 0.0, use second order if valid (i < nx), else fallback to u_current.
+        let mask_e_valid: Mask<i32, LANES> = Simd::from_slice(&(i..i + LANES).collect::<Vec<_>>())
+            .simd_lt(Simd::splat(nx))
+            .into();
+        let candidate_right = mask_e_valid.select(
+            Simd::splat(1.5) * u_current - Simd::splat(0.5) * u_e,
+            u_current,
+        );
+
+        let mask = u_w.simd_ge(Simd::splat(0.0));
+        mask.select(candidate_left, candidate_right)
     }
 
     #[inline(always)]
@@ -1018,12 +1065,12 @@ impl Model {
     #[inline(always)]
     fn u_face_n_second_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
-        let idx     = i + j * (nx + 1);
-        let idx_n   = i + (j + 1) * (nx + 1);
+        let idx = i + j * (nx + 1);
+        let idx_n = i + (j + 1) * (nx + 1);
 
         // Load the current and next rows into SIMD vectors.
         let current = Simd::from_slice(&self.u[idx..idx + LANES]);
-        let north    = Simd::from_slice(&self.u[idx_n..idx_n + LANES]);
+        let north = Simd::from_slice(&self.u[idx_n..idx_n + LANES]);
 
         // When v_n >= 0.0:
         //   If j > 1, use a second–order upwind (using the value from previous row),
@@ -1057,32 +1104,42 @@ impl Model {
     #[inline(always)]
     fn u_face_n_quick(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
-        let idx   = i + j * (nx + 1);
+        let idx = i + j * (nx + 1);
         let idx_n = i + (j + 1) * (nx + 1);
 
         // Load current and north row velocities as SIMD vectors.
-        let u     = Simd::from_slice(&self.u[idx..idx + LANES]);
-        let u_n   = Simd::from_slice(&self.u[idx_n..idx_n + LANES]);
-        
+        let u = Simd::from_slice(&self.u[idx..idx + LANES]);
+        let u_n = Simd::from_slice(&self.u[idx_n..idx_n + LANES]);
+
         // Load south row (j - 1) velocities.
         let idx_s = i + (j - 1) * (nx + 1);
-        let u_s   = Simd::from_slice(&self.u[idx_s..idx_s + LANES]);
-        
+        let u_s = Simd::from_slice(&self.u[idx_s..idx_s + LANES]);
+
         // Load row j + 2 velocities.
         let idx_nn = i + (j + 2) * (nx + 1);
-        let u_nn   = Simd::from_slice(&self.u[idx_nn..idx_nn + LANES]);
+        let u_nn = Simd::from_slice(&self.u[idx_nn..idx_nn + LANES]);
 
         // Get the north face v values as a SIMD vector.
         let v_n = self.get_v_north(i, j);
 
         // For positive v_n, choose second-order upwind if j >= 2, else first-order.
-        let res_positive_second = (-u_s + Simd::splat(6.0) * u + Simd::splat(3.0) * u_n) / Simd::splat(8.0);
-        let res_positive_first  = Simd::splat(1.5) * u - Simd::splat(0.5) * u_s;
-        let candidate_positive = if j >= 2 { res_positive_second } else { res_positive_first };
+        let res_positive_second =
+            (-u_s + Simd::splat(6.0) * u + Simd::splat(3.0) * u_n) / Simd::splat(8.0);
+        let res_positive_first = Simd::splat(1.5) * u - Simd::splat(0.5) * u_s;
+        let candidate_positive = if j >= 2 {
+            res_positive_second
+        } else {
+            res_positive_first
+        };
 
         // For negative v_n, use second-order upwind if possible.
-        let res_negative = (Simd::splat(3.0) * u + Simd::splat(6.0) * u_n - u_nn) / Simd::splat(8.0);
-        let candidate_negative = if j < self.grid.ny - 2 { res_negative } else { u_n };
+        let res_negative =
+            (Simd::splat(3.0) * u + Simd::splat(6.0) * u_n - u_nn) / Simd::splat(8.0);
+        let candidate_negative = if j < self.grid.ny - 2 {
+            res_negative
+        } else {
+            u_n
+        };
 
         // Use a SIMD mask based on v_n >= 0.0 to select the appropriate candidate.
         let mask = v_n.simd_ge(Simd::splat(0.0));
@@ -1097,7 +1154,7 @@ impl Model {
 
         // Load u values for the south and current row
         let u_south = Simd::from_slice(&self.u[idx_s..idx_s + LANES]);
-        let u_curr  = Simd::from_slice(&self.u[idx..idx + LANES]);
+        let u_curr = Simd::from_slice(&self.u[idx..idx + LANES]);
 
         // Get v_south values using existing helper which returns Simd<f32, LANES>
         let v_s = self.get_v_south(i, j);
@@ -1110,13 +1167,13 @@ impl Model {
     #[inline(always)]
     fn u_face_s_second_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
-        let idx     = i + j * (nx + 1);
-        let idx_s   = i + (j - 1) * (nx + 1);
-    
+        let idx = i + j * (nx + 1);
+        let idx_s = i + (j - 1) * (nx + 1);
+
         // Load current and south row into SIMD vectors.
         let current = Simd::from_slice(&self.u[idx..idx + LANES]);
-        let south   = Simd::from_slice(&self.u[idx_s..idx_s + LANES]);
-    
+        let south = Simd::from_slice(&self.u[idx_s..idx_s + LANES]);
+
         // When v_s >= 0.0:
         //   If j > 1, use second–order upwind (using the value from row j-2),
         //   otherwise, fall back to south row.
@@ -1127,18 +1184,18 @@ impl Model {
         } else {
             south
         };
-    
+
         // When v_s < 0.0:
         //   If j < (grid.ny - 1), use second–order upwind (using the value from row j+1),
         //   otherwise, fall back to current.
         let res_negative = if j < self.grid.ny - 1 {
             let idx_north = i + (j + 1) * (nx + 1);
-            let north     = Simd::from_slice(&self.u[idx_north..idx_north + LANES]);
+            let north = Simd::from_slice(&self.u[idx_north..idx_north + LANES]);
             current * Simd::splat(1.5) - north * Simd::splat(0.5)
         } else {
             current
         };
-    
+
         // Use SIMD mask based on v_s to select between the two alternatives.
         let v_s = self.get_v_south(i, j);
         let mask = v_s.simd_ge(Simd::splat(0.0));
@@ -1149,14 +1206,14 @@ impl Model {
     fn u_face_s_quick(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
         let base_stride = nx + 1;
-        let idx   = i + j * base_stride;
+        let idx = i + j * base_stride;
         let idx_s = i + (j - 1) * base_stride;
-        let u     = Simd::from_slice(&self.u[idx..idx+LANES]);
-        let u_s   = Simd::from_slice(&self.u[idx_s..idx_s+LANES]);
+        let u = Simd::from_slice(&self.u[idx..idx + LANES]);
+        let u_s = Simd::from_slice(&self.u[idx_s..idx_s + LANES]);
 
         let candidate_positive = if j >= 2 {
             let idx_ss = i + (j - 2) * base_stride;
-            let u_ss = Simd::from_slice(&self.u[idx_ss..idx_ss+LANES]);
+            let u_ss = Simd::from_slice(&self.u[idx_ss..idx_ss + LANES]);
             (-u_ss + Simd::splat(6.0) * u_s + Simd::splat(3.0) * u) / Simd::splat(8.0)
         } else {
             Simd::splat(1.5) * u_s - Simd::splat(0.5) * u
@@ -1164,7 +1221,7 @@ impl Model {
 
         let candidate_negative = if j < self.grid.ny - 1 {
             let idx_n = i + (j + 1) * base_stride;
-            let u_n = Simd::from_slice(&self.u[idx_n..idx_n+LANES]);
+            let u_n = Simd::from_slice(&self.u[idx_n..idx_n + LANES]);
             (Simd::splat(3.0) * u_s + Simd::splat(6.0) * u - u_n) / Simd::splat(8.0)
         } else {
             u
