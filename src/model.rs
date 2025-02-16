@@ -1333,6 +1333,7 @@ impl Model {
                 let start = Instant::now();
                 let commands_in_queue = command_receiver.try_iter();
 
+                let mut snapshot_sent = false;
                 for command in commands_in_queue {
                     match command {
                         Command::Stop => break,
@@ -1340,9 +1341,12 @@ impl Model {
                             self.set_parameters(&params);
                         }
                         Command::GetSnapshot => {
-                            let mut snapshot = self.get_snapshot();
-                            snapshot.paused = paused;
-                            snapshot_sender.send(snapshot).unwrap();
+                            if !snapshot_sent {
+                                let mut snapshot = self.get_snapshot();
+                                snapshot.paused = paused;
+                                snapshot_sender.send(snapshot).unwrap();
+                                snapshot_sent = true;
+                            }
                         }
                         Command::Pause => {
                             paused = true;
