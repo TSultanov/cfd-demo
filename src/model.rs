@@ -186,6 +186,9 @@ pub struct Model {
     /// Pressure field: size = nx*ny.
     pub p: Vec<f32>,
 
+    obstacle_mask_u: Vec<bool>,
+    obstacle_mask_v: Vec<bool>,
+
     // Previous fields (for extrapolation and residual computation)
     pub u_prev: Vec<f32>,
     pub v_prev: Vec<f32>,
@@ -237,6 +240,37 @@ impl Model {
         let v = vec![0.0; size_v];
         let p = vec![0.0; size_p];
 
+        // Create and populate the obstacle mask.
+        let mut obstacle_mask_u = vec![false; size_u];
+        let mut obstacle_mask_v = vec![false; size_v];
+        if let Some(obstacle) = &grid.obstacle {
+            for j in 0..ny {
+                for i in 0..nx {
+                    let x = (i as f32 + 0.5) * grid.dx;
+                    let y = (j as f32 + 0.5) * grid.dy;
+                    let dx = x - obstacle.center_x;
+                    let dy = y - obstacle.center_y;
+                    let distance = (dx * dx + dy * dy).sqrt();
+                    if distance < obstacle.radius {
+                        // Inside the obstacle.
+                        if i > 0 {
+                            obstacle_mask_u[i + j * (nx + 1)] = true;
+                        }
+                        if i < nx {
+                            obstacle_mask_u[(i + 1) + j * (nx + 1)] = true;
+                        }
+                        if j > 0 {
+                            obstacle_mask_v[i + j * nx] = true;
+                        }
+                        if j < ny {
+                            obstacle_mask_v[i + (j + 1) * nx] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+
         Self {
             grid,
             dt: params.dt,
@@ -252,6 +286,9 @@ impl Model {
             u: u.clone(),
             v: v.clone(),
             p,
+
+            obstacle_mask_u,
+            obstacle_mask_v,
             u_prev: u.clone(),
             v_prev: v.clone(),
             u_old: u.clone(),
@@ -473,9 +510,7 @@ impl Model {
         for j in 1..(ny - 1) {
             for i in 1..nx {
                 let idx = i + j * (nx + 1);
-                let x = i as f32 * dx;
-                let y = (j as f32 + 0.5) * dy;
-                if self.is_point_in_obstacle(x, y) {
+                if self.obstacle_mask_u[idx] {
                     self.u_star[idx] = 0.0;
                     continue;
                 }
@@ -601,9 +636,7 @@ impl Model {
         for j in 1..ny {
             for i in 1..(nx - 1) {
                 let idx = i + j * nx;
-                let x = (i as f32 + 0.5) * dx;
-                let y = j as f32 * dy;
-                if self.is_point_in_obstacle(x, y) {
+                if self.obstacle_mask_v[idx] {
                     self.v_star[idx] = 0.0;
                     continue;
                 }
@@ -726,7 +759,9 @@ impl Model {
         }
 
         // Enforce boundary conditions
+        let start = Instant::now();
         self.apply_boundary_conditions();
+        println!("boundary time: {:?}", start.elapsed());
     }
 
     /// A helper for the Jacobi pressure correction solver.
@@ -825,7 +860,6 @@ impl Model {
     fn apply_boundary_conditions(&mut self) {
         let nx = self.grid.nx;
         let ny = self.grid.ny;
-        let dx = self.grid.dx;
         let dy = self.grid.dy;
 
         // For u: Inlet boundary: set left boundary faces according to the chosen profile.
@@ -867,30 +901,17 @@ impl Model {
         // Enforce zero velocity in the obstacle region (by checking cell center positions).
         for j in 0..ny {
             for i in 0..(nx + 1) {
-                let x = i as f32 * dx;
-                let y = (j as f32 + 0.5) * dy;
-                if self.is_point_in_obstacle(x, y) {
+                if self.obstacle_mask_u[i + j * (nx + 1)] {
                     self.u[i + j * (nx + 1)] = 0.0;
                 }
             }
         }
         for j in 0..(ny + 1) {
             for i in 0..nx {
-                let x = (i as f32 + 0.5) * dx;
-                let y = j as f32 * dy;
-                if self.is_point_in_obstacle(x, y) {
+                if self.obstacle_mask_v[i + j * nx] {
                     self.v[i + j * nx] = 0.0;
                 }
             }
-        }
-    }
-
-    /// Helper: check whether point (x,y) is inside the obstacle.
-    fn is_point_in_obstacle(&self, x: f32, y: f32) -> bool {
-        if let Some(cyl) = &self.grid.obstacle {
-            ((x - cyl.center_x).powi(2) + (y - cyl.center_y).powi(2)).sqrt() <= cyl.radius
-        } else {
-            false
         }
     }
 
