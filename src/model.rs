@@ -747,13 +747,39 @@ impl Model {
         // Compute the divergence (rhs) on pressure cells.
         let start_time = Instant::now();
         for j in 0..ny {
-            for i in 0..nx {
+            for i in (0..nx).step_by(LANES) {
+                if i + LANES > nx {
+                    for k in 0..(nx - i) {
+                        let idx = i + k + j * nx;
+                        let idx_e = (i + k + 1) + j * (nx + 1);
+                        let idx_w = i + k + j * (nx + 1);
+                        let idx_n = i + k + (j + 1) * nx;
+                        let idx_s = i + k + j * nx;
+
+                        let u_e = self.u_star[idx_e];
+                        let u_w = self.u_star[idx_w];
+                        let v_n = self.v_star[idx_n];
+                        let v_s = self.v_star[idx_s];
+                        self.rhs[idx] = ((u_e - u_w) / dx + (v_n - v_s) / dy) / dt_sub;
+                    }
+                    continue;
+                }
+
                 let idx = i + j * nx;
-                let u_right = self.u_star[i + 1 + j * (nx + 1)];
-                let u_left = self.u_star[i + j * (nx + 1)];
-                let v_top = self.v_star[i + (j + 1) * nx];
-                let v_bottom = self.v_star[i + j * nx];
-                self.rhs[idx] = ((u_right - u_left) / dx + (v_top - v_bottom) / dy) / dt_sub;
+                let idx_e = (i + 1) + j * (nx + 1);
+                let idx_w = i + j * (nx + 1);
+                let idx_n = i + (j + 1) * nx;
+                let idx_s = i + j * nx;
+
+                // Load the velocities.
+                let u_e = Simd::from_slice(&self.u_star[idx_e..idx_e + LANES]);
+                let u_w = Simd::from_slice(&self.u_star[idx_w..idx_w + LANES]);
+                let v_n = Simd::from_slice(&self.v_star[idx_n..idx_n + LANES]);
+                let v_s = Simd::from_slice(&self.v_star[idx_s..idx_s + LANES]);
+
+                // Compute the divergence.
+                let rhs = ((u_e - u_w) / dx_v + (v_n - v_s) / dy_v) / Simd::splat(dt_sub);
+                rhs.copy_to_slice(&mut self.rhs[idx..idx + LANES]);
             }
         }
         println!("rhs time: {:?}", start_time.elapsed());
