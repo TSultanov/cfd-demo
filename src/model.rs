@@ -1,8 +1,13 @@
+use std::simd::cmp::SimdPartialOrd;
+use std::simd::Simd;
+
 use std::{
     sync::mpsc::{self, TryRecvError},
     thread,
     time::{Duration, Instant},
 };
+
+const LANES: usize = 8;
 
 #[derive(Clone)]
 pub struct SimulationParams {
@@ -395,46 +400,59 @@ impl Model {
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
                 for j in 1..(ny - 1) {
-                    for i in 1..nx {
+                    for i in (1..nx).step_by(LANES) {
                         let idx = i + j * (nx + 1);
+                        let idx_end = (i + LANES) + j * (nx + 1);
 
-                        self.u_v_n[idx] = self.get_v_north(i, j);
-                        self.u_v_s[idx] = self.get_v_south(i, j);
+                        self.get_v_north(i, j).copy_to_slice(&mut self.u_v_n[idx..idx_end]);
+                        self.get_v_south(i, j).copy_to_slice(&mut self.u_v_s[idx..idx_end]);
+                        self.u_face_n_first_order(i, j).copy_to_slice(&mut self.u_u_n[idx..idx_end]);
+                        self.u_face_s_first_order(i, j).copy_to_slice(&mut self.u_u_s[idx..idx_end]);
 
-                        self.u_u_e[idx] = self.u_face_e_first_order(i, j);
-                        self.u_u_w[idx] = self.u_face_w_first_order(i, j);
-                        self.u_u_n[idx] = self.u_face_n_first_order(i, j);
-                        self.u_u_s[idx] = self.u_face_s_first_order(i, j);
+                        for k in 0..LANES {
+                            let idx = (i + k) + j * (nx + 1);
+                            self.u_u_e[idx] = self.u_face_e_first_order(i + k, j);
+                            self.u_u_w[idx] = self.u_face_w_first_order(i + k, j);
+                        }
                     }
                 }
             }
             VelocityScheme::SecondOrder => {
                 for j in 1..(ny - 1) {
-                    for i in 1..nx {
+                    for i in (1..nx).step_by(LANES) {
                         let idx = i + j * (nx + 1);
+                        let idx_end = (i + LANES) + j * (nx + 1);
 
-                        self.u_v_n[idx] = self.get_v_north(i, j);
-                        self.u_v_s[idx] = self.get_v_south(i, j);
+                        self.get_v_north(i, j).copy_to_slice(&mut self.u_v_n[idx..idx_end]);
+                        self.get_v_south(i, j).copy_to_slice(&mut self.u_v_s[idx..idx_end]);
+                        self.u_face_n_second_order(i, j).copy_to_slice(&mut self.u_u_n[idx..idx_end]);
+                        self.u_face_s_second_order(i, j).copy_to_slice(&mut self.u_u_s[idx..idx_end]);
 
-                        self.u_u_e[idx] = self.u_face_e_second_order(i, j);
-                        self.u_u_w[idx] = self.u_face_w_second_order(i, j);
-                        self.u_u_n[idx] = self.u_face_n_second_order(i, j);
-                        self.u_u_s[idx] = self.u_face_s_second_order(i, j);
+                        for k in 0..LANES {
+                            let idx = (i + k) + j * (nx + 1);
+
+                            self.u_u_e[idx] = self.u_face_e_second_order(i+k, j);
+                            self.u_u_w[idx] = self.u_face_w_second_order(i+k, j);
+                        }
                     }
                 }
             }
             VelocityScheme::Quick => {
                 for j in 1..(ny - 1) {
-                    for i in 1..nx {
+                    for i in (1..nx).step_by(LANES) {
                         let idx = i + j * (nx + 1);
+                        let idx_end = (i + LANES) + j * (nx + 1);
 
-                        self.u_v_n[idx] = self.get_v_north(i, j);
-                        self.u_v_s[idx] = self.get_v_south(i, j);
+                        self.get_v_north(i, j).copy_to_slice(&mut self.u_v_n[idx..idx_end]);
+                        self.get_v_south(i, j).copy_to_slice(&mut self.u_v_s[idx..idx_end]);
+                        self.u_face_n_quick(i, j).copy_to_slice(&mut self.u_u_n[idx..idx_end]);
+                        self.u_face_s_quick(i, j).copy_to_slice(&mut self.u_u_s[idx..idx_end]);
 
-                        self.u_u_e[idx] = self.u_face_e_quick(i, j);
-                        self.u_u_w[idx] = self.u_face_w_quick(i, j);
-                        self.u_u_n[idx] = self.u_face_n_quick(i, j);
-                        self.u_u_s[idx] = self.u_face_s_quick(i, j);
+                        for k in 0..LANES {
+                            let idx = (i + k) + j * (nx + 1);
+                            self.u_u_e[idx] = self.u_face_e_quick(i + k, j);
+                            self.u_u_w[idx] = self.u_face_w_quick(i + k, j);
+                        }
                     }
                 }
             }
@@ -791,7 +809,7 @@ impl Model {
     fn u_face_e_first_order(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
-        let idx_e = idx + 1;
+        let idx_e = (i + 1) + j * (nx + 1);
         let u_avg_e = 0.5 * (self.u[idx] + self.u[idx_e]);
         if u_avg_e >= 0.0 {
             self.u[idx]
@@ -839,7 +857,7 @@ impl Model {
     fn u_face_w_first_order(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
-        let idx_w = idx - 1;
+        let idx_w = (i - 1) + j * (nx + 1);
         let u_avg_w = 0.5 * (self.u[idx_w] + self.u[idx]);
         if u_avg_w >= 0.0 {
             self.u[idx_w]
@@ -884,121 +902,197 @@ impl Model {
     }
 
     #[inline(always)]
-    fn u_face_n_first_order(&self, i: usize, j: usize) -> f32 {
+    fn u_face_n_first_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
         let idx_n = i + (j + 1) * (nx + 1);
+
+        // Load current and north u values as SIMD vectors.
+        let u_curr = Simd::from_slice(&self.u[idx..idx + LANES]);
+        let u_next = Simd::from_slice(&self.u[idx_n..idx_n + LANES]);
+
+        // Get v at north face as SIMD vector and create a mask.
         let v_n = self.get_v_north(i, j);
-        if v_n >= 0.0 {
-            self.u[idx]
-        } else {
-            self.u[idx_n]
-        }
+        let mask = v_n.simd_ge(Simd::splat(0.0));
+
+        // Select u_curr if mask true, else u_next.
+        mask.select(u_curr, u_next)
     }
 
     #[inline(always)]
-    fn u_face_n_second_order(&self, i: usize, j: usize) -> f32 {
+    fn u_face_n_second_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
-        let idx = i + j * (nx + 1);
+        let idx     = i + j * (nx + 1);
+        let idx_n   = i + (j + 1) * (nx + 1);
+
+        // Load the current and next rows into SIMD vectors.
+        let current = Simd::from_slice(&self.u[idx..idx + LANES]);
+        let north    = Simd::from_slice(&self.u[idx_n..idx_n + LANES]);
+
+        // When v_n >= 0.0:
+        //   If j > 1, use a second–order upwind (using the value from previous row),
+        //   otherwise, fall back to current.
+        let res_positive = if j > 1 {
+            // Load south row SIMD values.
+            let idx_s = i + (j - 1) * (nx + 1);
+            let current_s = Simd::from_slice(&self.u[idx_s..idx_s + LANES]);
+            current * Simd::splat(1.5) - current_s * Simd::splat(0.5)
+        } else {
+            current
+        };
+
+        // When v_n < 0.0:
+        //   If there is a valid (j+2) row, use a second–order upwind (using the value from row j+2),
+        //   otherwise, fall back to next row.
+        let res_negative = if (idx_n + nx + 1) < self.u.len() && j < self.grid.ny - 1 {
+            let idx_north_north = i + (j + 2) * (nx + 1);
+            let north_north = Simd::from_slice(&self.u[idx_north_north..idx_north_north + LANES]);
+            north * Simd::splat(1.5) - north_north * Simd::splat(0.5)
+        } else {
+            north
+        };
+
+        // Use SIMD mask based on v_n to select between the two alternatives.
+        let v_n = self.get_v_north(i, j);
+        let mask = v_n.simd_ge(Simd::splat(0.0));
+        mask.select(res_positive, res_negative)
+    }
+
+    #[inline(always)]
+    fn u_face_n_quick(&self, i: usize, j: usize) -> Simd<f32, LANES> {
+        let nx = self.grid.nx;
+        let idx   = i + j * (nx + 1);
         let idx_n = i + (j + 1) * (nx + 1);
+
+        // Load current and north row velocities as SIMD vectors.
+        let u     = Simd::from_slice(&self.u[idx..idx + LANES]);
+        let u_n   = Simd::from_slice(&self.u[idx_n..idx_n + LANES]);
+        
+        // Load south row (j - 1) velocities.
+        let idx_s = i + (j - 1) * (nx + 1);
+        let u_s   = Simd::from_slice(&self.u[idx_s..idx_s + LANES]);
+        
+        // Load row j + 2 velocities.
+        let idx_nn = i + (j + 2) * (nx + 1);
+        let u_nn   = Simd::from_slice(&self.u[idx_nn..idx_nn + LANES]);
+
+        // Get the north face v values as a SIMD vector.
         let v_n = self.get_v_north(i, j);
-        if v_n >= 0.0 {
-            if j > 1 {
-                1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)]
-            } else {
-                self.u[idx]
-            }
-        } else if (i + (j + 2) * (nx + 1)) < self.u.len() && j < self.grid.ny - 1 {
-            1.5 * self.u[idx_n] - 0.5 * self.u[i + (j + 2) * (nx + 1)]
-        } else {
-            self.u[idx_n]
-        }
+
+        // For positive v_n, choose second-order upwind if j >= 2, else first-order.
+        let res_positive_second = (-u_s + Simd::splat(6.0) * u + Simd::splat(3.0) * u_n) / Simd::splat(8.0);
+        let res_positive_first  = Simd::splat(1.5) * u - Simd::splat(0.5) * u_s;
+        let candidate_positive = if j >= 2 { res_positive_second } else { res_positive_first };
+
+        // For negative v_n, use second-order upwind if possible.
+        let res_negative = (Simd::splat(3.0) * u + Simd::splat(6.0) * u_n - u_nn) / Simd::splat(8.0);
+        let candidate_negative = if j < self.grid.ny - 2 { res_negative } else { u_n };
+
+        // Use a SIMD mask based on v_n >= 0.0 to select the appropriate candidate.
+        let mask = v_n.simd_ge(Simd::splat(0.0));
+        mask.select(candidate_positive, candidate_negative)
     }
 
     #[inline(always)]
-    fn u_face_n_quick(&self, i: usize, j: usize) -> f32 {
-        let nx = self.grid.nx;
-        let idx = i + j * (nx + 1);
-        let idx_n = i + (j + 1) * (nx + 1);
-        let v_n = self.get_v_north(i, j);
-        if v_n >= 0.0 {
-            if j >= 2 {
-                (-self.u[i + (j - 1) * (nx + 1)] + 6.0 * self.u[idx] + 3.0 * self.u[idx_n]) / 8.0
-            } else {
-                1.5 * self.u[idx] - 0.5 * self.u[i + (j - 1) * (nx + 1)]
-            }
-        } else if j < self.grid.ny - 2 {
-            (3.0 * self.u[idx] + 6.0 * self.u[idx_n] - self.u[i + (j + 2) * (nx + 1)]) / 8.0
-        } else {
-            self.u[idx_n]
-        }
-    }
-
-    #[inline(always)]
-    fn u_face_s_first_order(&self, i: usize, j: usize) -> f32 {
+    fn u_face_s_first_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
         let idx_s = i + (j - 1) * (nx + 1);
+
+        // Load u values for the south and current row
+        let u_south = Simd::from_slice(&self.u[idx_s..idx_s + LANES]);
+        let u_curr  = Simd::from_slice(&self.u[idx..idx + LANES]);
+
+        // Get v_south values using existing helper which returns Simd<f32, LANES>
         let v_s = self.get_v_south(i, j);
-        if v_s >= 0.0 {
-            self.u[idx_s]
-        } else {
-            self.u[idx]
-        }
+
+        // Create a mask: if v_s >= 0.0 select u_south, else select u_curr.
+        let mask = v_s.simd_ge(Simd::splat(0.0));
+        mask.select(u_south, u_curr)
     }
 
     #[inline(always)]
-    fn u_face_s_second_order(&self, i: usize, j: usize) -> f32 {
+    fn u_face_s_second_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
-        let idx = i + j * (nx + 1);
-        let idx_s = i + (j - 1) * (nx + 1);
+        let idx     = i + j * (nx + 1);
+        let idx_s   = i + (j - 1) * (nx + 1);
+    
+        // Load current and south row into SIMD vectors.
+        let current = Simd::from_slice(&self.u[idx..idx + LANES]);
+        let south   = Simd::from_slice(&self.u[idx_s..idx_s + LANES]);
+    
+        // When v_s >= 0.0:
+        //   If j > 1, use second–order upwind (using the value from row j-2),
+        //   otherwise, fall back to south row.
+        let res_positive = if j > 1 {
+            let idx_s_south = i + (j - 2) * (nx + 1);
+            let south_south = Simd::from_slice(&self.u[idx_s_south..idx_s_south + LANES]);
+            south * Simd::splat(1.5) - south_south * Simd::splat(0.5)
+        } else {
+            south
+        };
+    
+        // When v_s < 0.0:
+        //   If j < (grid.ny - 1), use second–order upwind (using the value from row j+1),
+        //   otherwise, fall back to current.
+        let res_negative = if j < self.grid.ny - 1 {
+            let idx_north = i + (j + 1) * (nx + 1);
+            let north     = Simd::from_slice(&self.u[idx_north..idx_north + LANES]);
+            current * Simd::splat(1.5) - north * Simd::splat(0.5)
+        } else {
+            current
+        };
+    
+        // Use SIMD mask based on v_s to select between the two alternatives.
         let v_s = self.get_v_south(i, j);
-        if v_s >= 0.0 {
-            if j > 1 {
-                1.5 * self.u[idx_s] - 0.5 * self.u[i + (j - 2) * (nx + 1)]
-            } else {
-                self.u[idx_s]
-            }
-        } else if j < self.grid.ny {
-            1.5 * self.u[idx] - 0.5 * self.u[i + (j + 1) * (nx + 1)]
-        } else {
-            self.u[idx]
-        }
+        let mask = v_s.simd_ge(Simd::splat(0.0));
+        mask.select(res_positive, res_negative)
     }
 
     #[inline(always)]
-    fn u_face_s_quick(&self, i: usize, j: usize) -> f32 {
+    fn u_face_s_quick(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
-        let idx = i + j * (nx + 1);
-        let idx_s = i + (j - 1) * (nx + 1);
+        let base_stride = nx + 1;
+        let idx   = i + j * base_stride;
+        let idx_s = i + (j - 1) * base_stride;
+        let u     = Simd::from_slice(&self.u[idx..idx+LANES]);
+        let u_s   = Simd::from_slice(&self.u[idx_s..idx_s+LANES]);
+
+        let candidate_positive = if j >= 2 {
+            let idx_ss = i + (j - 2) * base_stride;
+            let u_ss = Simd::from_slice(&self.u[idx_ss..idx_ss+LANES]);
+            (-u_ss + Simd::splat(6.0) * u_s + Simd::splat(3.0) * u) / Simd::splat(8.0)
+        } else {
+            Simd::splat(1.5) * u_s - Simd::splat(0.5) * u
+        };
+
+        let candidate_negative = if j < self.grid.ny - 1 {
+            let idx_n = i + (j + 1) * base_stride;
+            let u_n = Simd::from_slice(&self.u[idx_n..idx_n+LANES]);
+            (Simd::splat(3.0) * u_s + Simd::splat(6.0) * u - u_n) / Simd::splat(8.0)
+        } else {
+            u
+        };
+
         let v_s = self.get_v_south(i, j);
-        if v_s >= 0.0 {
-            if j >= 2 {
-                (-self.u[i + (j - 2) * (nx + 1)] + 6.0 * self.u[idx_s] + 3.0 * self.u[idx]) / 8.0
-            } else {
-                1.5 * self.u[idx_s] - 0.5 * self.u[idx]
-            }
-        } else if j < self.grid.ny - 1 {
-            (3.0 * self.u[idx_s] + 6.0 * self.u[idx] - self.u[i + (j + 1) * (nx + 1)]) / 8.0
-        } else {
-            self.u[idx]
-        }
+        let mask = v_s.simd_ge(Simd::splat(0.0));
+        mask.select(candidate_positive, candidate_negative)
     }
 
     #[inline(always)]
-    fn get_v_north(&self, i: usize, j: usize) -> f32 {
+    fn get_v_north(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
-        let idx_v_nw = if i > 0 { (i - 1) + (j + 1) * nx } else { 0 };
-        let idx_v_n = i + (j + 1) * nx;
-        0.5 * (self.v[idx_v_nw] + self.v[idx_v_n])
+        let start = i + (j + 1) * nx;
+        // SAFETY: Caller must ensure that start+LANES does not exceed self.v.len()
+        Simd::from_slice(&self.v[start..start + LANES])
     }
 
     #[inline(always)]
-    fn get_v_south(&self, i: usize, j: usize) -> f32 {
+    fn get_v_south(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
-        let idx_v_s = if i > 0 { (i - 1) + j * nx } else { 0 };
-        let idx_v = i + j * nx;
-        0.5 * (self.v[idx_v_s] + self.v[idx_v])
+        let start = i + j * nx;
+        // SAFETY: Caller must ensure that start+LANES does not exceed self.v.len()
+        Simd::from_slice(&self.v[start..start + LANES])
     }
 
     // --- Helper methods for v velocity discretization ---
