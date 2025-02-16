@@ -792,32 +792,80 @@ impl Model {
 
         // ---------------- Pressure Correction Solver ----------------
         let denom = 2.0 / (dx * dx) + 2.0 / (dy * dy);
+        let denom_v = Simd::splat(denom);
         match self.pressure_solver {
             PressureSolver::SOR => {
                 // SOR solver implementation.
                 self.p_prime.fill(0.0);
                 let sor_omega = 1.7;
+                let sor_omega_v = Simd::splat(sor_omega);
+                let one_v = Simd::splat(1.0);
                 let pressure_tolerance = 1e-4;
                 let iterations = 50;
-                let mut max_error = 0.0;
+                let mut max_error: f32 = 0.0;
                 for _ in 0..iterations {
                     max_error = 0.0;
                     for j in 1..(ny - 1) {
-                        for i in 1..(nx - 1) {
-                            let idx = i + j * nx;
-                            let p_old = self.p_prime[idx];
-                            let p_update = ((self.p_prime[idx + 1] + self.p_prime[idx - 1])
-                                / (dx * dx)
-                                + (self.p_prime[i + (j + 1) * nx]
-                                    + self.p_prime[i + (j - 1) * nx])
-                                    / (dy * dy)
-                                - self.rhs[idx])
-                                / denom;
-                            self.p_prime[idx] = (1.0 - sor_omega) * p_old + sor_omega * p_update;
-                            let error = (self.p_prime[idx] - p_old).abs();
-                            if error > max_error {
-                                max_error = error;
+                        for i in (1..(nx - 1)).step_by(LANES) {
+                            if i + LANES > nx - 1 {
+                                for k in 0..(nx - i) {
+                                    let idx = i + k + j * nx;
+                                    let idx_e = (i + k + 1) + j * nx;
+                                    let idx_w = i + k + j * nx;
+                                    let idx_s = i + k + (j - 1) * nx;
+                                    let idx_n = i + k + (j + 1) * nx;
+
+                                    let p_old = self.p_prime[idx];
+
+                                    let p_prime_e = self.p_prime[idx_e];
+                                    let p_prime_w = self.p_prime[idx_w];
+                                    let p_prime_n = self.p_prime[idx_n];
+                                    let p_prime_s = self.p_prime[idx_s];
+                                    let rhs = self.rhs[idx];
+
+                                    let p_update = ((p_prime_e + p_prime_w)
+                                        / (dx * dx)
+                                        + (p_prime_n + p_prime_s) / (dy * dy)
+                                        - rhs)
+                                        / denom;
+
+                                    self.p_prime[idx] =
+                                        (1.0 - sor_omega) * p_old + sor_omega * p_update;
+
+                                    let error = (self.p_prime[idx] - p_old).abs();
+                                    if error > max_error {
+                                        max_error = error;
+                                    }
+                                }
+                                continue;
                             }
+
+                            let idx = i + j * nx;
+                            let idx_e = (i + 1) + j * nx;
+                            let idx_w = (i - 1) + j * nx;
+                            let idx_s = i + (j - 1) * nx;
+                            let idx_n = i + (j + 1) * nx;
+
+                            // Load neighbor values into SIMD vectors.
+                            let p_old = Simd::from_slice(&self.p_prime[idx..idx + LANES]);
+
+                            let p_prime_e = Simd::from_slice(&self.p_prime[idx_e..idx_e + LANES]);
+                            let p_prime_w = Simd::from_slice(&self.p_prime[idx_w..idx_w + LANES]);
+                            let p_prime_n = Simd::from_slice(&self.p_prime[idx_n..idx_n + LANES]);
+                            let p_prime_s = Simd::from_slice(&self.p_prime[idx_s..idx_s + LANES]);
+                            let rhs = Simd::from_slice(&self.rhs[idx..idx + LANES]);
+
+                            let p_update = ((p_prime_e + p_prime_w)
+                                / dx_v
+                                + (p_prime_n + p_prime_s) / dy_v
+                                - rhs)
+                                / denom_v;
+                            
+                            let new_val = sor_omega_v * p_update + (one_v - sor_omega_v) * p_old;
+                            new_val.copy_to_slice(&mut self.p_prime[idx..idx + LANES]);
+
+                            let error = (new_val - p_old).abs();
+                            max_error = max_error.max(error.reduce_max());
                         }
                     }
                     for i in 0..nx {
