@@ -413,12 +413,8 @@ impl Model {
                         self.get_v_south(i, j).copy_to_slice(&mut self.u_v_s[idx..idx_end]);
                         self.u_face_n_first_order(i, j).copy_to_slice(&mut self.u_u_n[idx..idx_end]);
                         self.u_face_s_first_order(i, j).copy_to_slice(&mut self.u_u_s[idx..idx_end]);
-
-                        for k in 0..LANES {
-                            let idx = (i + k) + j * (nx + 1);
-                            self.u_u_e[idx] = self.u_face_e_first_order(i + k, j);
-                            self.u_u_w[idx] = self.u_face_w_first_order(i + k, j);
-                        }
+                        self.u_face_e_first_order(i, j).copy_to_slice(&mut self.u_u_e[idx..idx_end]);
+                        self.u_face_w_first_order(i, j).copy_to_slice(&mut self.u_u_w[idx..idx_end]);
                     }
                 }
             }
@@ -504,29 +500,64 @@ impl Model {
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
                 for j in 1..ny {
-                    for i in 1..(nx - 1) {
+                    for i in (1..(nx - 1)).step_by(LANES) {
                         let idx = i + j * nx;
-                        self.v_u_e[idx] = self.u[(i + 1) + j * (nx + 1)];
-                        self.v_u_w[idx] = self.u[i + j * (nx + 1)];
+                        let idx_end = (i + LANES) + j * nx;
+                        
+                        if i + LANES > nx - 1 {
+                            for k in 0..(nx - i) {
+                                let idx = i + k + j * nx;
+                                self.v_u_e[idx] = self.u[(i + k + 1) + j * (nx + 1)];
+                                self.v_u_w[idx] = self.u[i + k + j * (nx + 1)];
+        
+                                self.v_v_n[idx] = self.v_face_n_first_order_scalar(i + k, j);
+                                self.v_v_s[idx] = self.v_face_s_first_order_scalar(i + k, j);
+                                self.v_v_e[idx] = self.v_face_e_first_order_scalar(i + k, j);
+                                self.v_v_w[idx] = self.v_face_w_first_order_scalar(i + k, j);
+                            }
+                            continue;
+                        }
 
-                        self.v_v_n[idx] = self.v_face_n_first_order(i, j);
-                        self.v_v_s[idx] = self.v_face_s_first_order(i, j);
-                        self.v_v_e[idx] = self.v_face_e_first_order(i, j);
-                        self.v_v_w[idx] = self.v_face_w_first_order(i, j);
+                        self.v_u_e[idx..idx_end].copy_from_slice(&self.u[(i + 1) + j * (nx + 1)..(i + LANES + 1) + j * (nx + 1)]);
+                        self.v_u_w[idx..idx_end].copy_from_slice(&self.u[i + j * (nx + 1)..i + LANES + j * (nx + 1)]);
+
+                        self.v_face_n_first_order(i, j).copy_to_slice(&mut self.v_v_n[idx..idx_end]);
+                        self.v_face_s_first_order(i, j).copy_to_slice(&mut self.v_v_s[idx..idx_end]);
+                        self.v_face_e_first_order(i, j).copy_to_slice(&mut self.v_v_e[idx..idx_end]);
+                        self.v_face_w_first_order(i, j).copy_to_slice(&mut self.v_v_w[idx..idx_end]);
                     }
                 }
             }
             VelocityScheme::SecondOrder => {
                 for j in 1..ny {
-                    for i in 1..(nx - 1) {
+                    for i in (1..(nx - 1)).step_by(LANES) {
                         let idx = i + j * nx;
-                        self.v_u_e[idx] = self.u[(i + 1) + j * (nx + 1)];
-                        self.v_u_w[idx] = self.u[i + j * (nx + 1)];
+                        let idx_end = (i + LANES) + j * nx;
 
-                        self.v_v_n[idx] = self.v_face_n_second_order(i, j);
-                        self.v_v_s[idx] = self.v_face_s_second_order(i, j);
-                        self.v_v_e[idx] = self.v_face_e_second_order(i, j);
-                        self.v_v_w[idx] = self.v_face_w_second_order(i, j);
+                        if i + LANES > nx - 1 {
+                            for k in 0..(nx - i) {
+                                let idx = i + k + j * nx;
+                                self.v_u_e[idx] = self.u[(i + k + 1) + j * (nx + 1)];
+                                self.v_u_w[idx] = self.u[i + k + j * (nx + 1)];
+        
+                                self.v_v_n[idx] = self.v_face_n_second_order(i + k, j);
+                                self.v_v_s[idx] = self.v_face_s_second_order(i + k, j);
+                                self.v_v_e[idx] = self.v_face_e_second_order(i + k, j);
+                                self.v_v_w[idx] = self.v_face_w_second_order(i + k, j);
+                            }
+                            continue;
+                        }
+
+                        self.v_u_e[idx..idx_end].copy_from_slice(&self.u[(i + 1) + j * (nx + 1)..(i + LANES + 1) + j * (nx + 1)]);
+                        self.v_u_w[idx..idx_end].copy_from_slice(&self.u[i + j * (nx + 1)..i + LANES + j * (nx + 1)]);
+
+                        for k in 0..LANES {
+                            let idx = (i + k) + j * nx;
+                            self.v_v_n[idx] = self.v_face_n_second_order(i + k, j);
+                            self.v_v_s[idx] = self.v_face_s_second_order(i + k, j);
+                            self.v_v_e[idx] = self.v_face_e_second_order(i + k, j);
+                            self.v_v_w[idx] = self.v_face_w_second_order(i + k, j);
+                        }
                     }
                 }
             }
@@ -853,23 +884,28 @@ impl Model {
 
     // --- Helper methods for u velocity discretization ---
     #[inline(always)]
-    fn u_face_e_first_order(&self, i: usize, j: usize) -> f32 {
+    fn u_face_e_first_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
-        let idx = i + j * (nx + 1);
-        let idx_e = (i + 1) + j * (nx + 1);
-        let u_avg_e = 0.5 * (self.u[idx] + self.u[idx_e]);
-        if u_avg_e >= 0.0 {
-            self.u[idx]
-        } else {
-            self.u[idx_e]
-        }
+        let idx_left = i + j * (nx + 1);
+        let idx_right = (i + 1) + j * (nx + 1);
+        
+        // Load LANES values for left and right faces.
+        let u_left = Simd::from_slice(&self.u[idx_left..idx_left + LANES]);
+        let u_right = Simd::from_slice(&self.u[idx_right..idx_right + LANES]);
+        
+        // Compute average using SIMD operations.
+        let u_avg = (u_left + u_right) * Simd::splat(0.5);
+        
+        // Create mask: if average is >= 0.0, choose u_left, else choose u_right.
+        let mask = u_avg.simd_ge(Simd::splat(0.0));
+        mask.select(u_left, u_right)
     }
 
     #[inline(always)]
     fn u_face_e_second_order(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
-        let idx_e = idx + 1;
+        let idx_e = (i + 1) + j * (nx + 1);
         if self.u[idx] >= 0.0 {
             if i > 1 {
                 1.5 * self.u[idx] - 0.5 * self.u[idx - 1]
@@ -901,16 +937,18 @@ impl Model {
     }
 
     #[inline(always)]
-    fn u_face_w_first_order(&self, i: usize, j: usize) -> f32 {
+    fn u_face_w_first_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
+
         let idx = i + j * (nx + 1);
         let idx_w = (i - 1) + j * (nx + 1);
-        let u_avg_w = 0.5 * (self.u[idx_w] + self.u[idx]);
-        if u_avg_w >= 0.0 {
-            self.u[idx_w]
-        } else {
-            self.u[idx]
-        }
+
+        let u_current = Simd::from_slice(&self.u[idx..idx + LANES]);
+        let u_w = Simd::from_slice(&self.u[idx_w..idx_w + LANES]);
+        let u_avg = (u_w + u_current) * Simd::splat(0.5);
+
+        let mask = u_avg.simd_ge(Simd::splat(0.0));
+        mask.select(u_w, u_current)
     }
 
     #[inline(always)]
@@ -1144,7 +1182,7 @@ impl Model {
 
     // --- Helper methods for v velocity discretization ---
     #[inline(always)]
-    fn v_face_e_first_order(&self, i: usize, j: usize) -> f32 {
+    fn v_face_e_first_order_scalar(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * nx;
         let u_e = self.u[(i + 1) + j * (nx + 1)];
@@ -1153,6 +1191,19 @@ impl Model {
         } else {
             self.v[idx + 1]
         }
+    }
+
+    #[inline(always)]
+    fn v_face_e_first_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        // Load LANES consecutive values for u_e, v_current and v_next.
+        let u_e = Simd::from_slice(&self.u[(i + 1) + j * (nx + 1)..(i + 1) + j * (nx + 1) + LANES]);
+        let v_curr = Simd::from_slice(&self.v[idx..idx + LANES]);
+        let v_next = Simd::from_slice(&self.v[idx + 1..idx + 1 + LANES]);
+        // Create mask: if u_e >= 0.0, select v_curr, else v_next.
+        let mask = u_e.simd_ge(Simd::splat(0.0));
+        mask.select(v_curr, v_next)
     }
 
     #[inline(always)]
@@ -1192,7 +1243,7 @@ impl Model {
     }
 
     #[inline(always)]
-    fn v_face_w_first_order(&self, i: usize, j: usize) -> f32 {
+    fn v_face_w_first_order_scalar(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * nx;
         let u_w = self.u[i + j * (nx + 1)];
@@ -1201,6 +1252,23 @@ impl Model {
         } else {
             self.v[idx]
         }
+    }
+
+    #[inline(always)]
+    fn v_face_w_first_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
+        let nx = self.grid.nx;
+        let base_u = i + j * (nx + 1);
+        let base_v = i + j * nx;
+        // Load u values for LANES lanes starting at the given index.
+        let u_w = Simd::from_slice(&self.u[base_u..base_u + LANES]);
+        // Create a mask where u_w >= 0.0.
+        let mask = u_w.simd_ge(Simd::splat(0.0));
+        // Load corresponding v values:
+        // For lanes where u_w is >= 0.0, load from v at index (base_v - 1);
+        // otherwise load from v at index base_v.
+        let v_left = Simd::from_slice(&self.v[(base_v - 1)..(base_v - 1 + LANES)]);
+        let v_center = Simd::from_slice(&self.v[base_v..base_v + LANES]);
+        mask.select(v_left, v_center)
     }
 
     #[inline(always)]
@@ -1238,7 +1306,7 @@ impl Model {
     }
 
     #[inline(always)]
-    fn v_face_n_first_order(&self, i: usize, j: usize) -> f32 {
+    fn v_face_n_first_order_scalar(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * nx;
         let idx_n = i + (j + 1) * nx;
@@ -1248,6 +1316,18 @@ impl Model {
         } else {
             self.v[idx_n]
         }
+    }
+
+    #[inline(always)]
+    fn v_face_n_first_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let idx_n = i + (j + 1) * nx;
+        let v_current = Simd::from_slice(&self.v[idx..idx + LANES]);
+        let v_north = Simd::from_slice(&self.v[idx_n..idx_n + LANES]);
+        let v_avg = (v_current + v_north) * Simd::splat(0.5);
+        let mask = v_avg.simd_ge(Simd::splat(0.0));
+        mask.select(v_current, v_north)
     }
 
     #[inline(always)]
@@ -1289,7 +1369,7 @@ impl Model {
     }
 
     #[inline(always)]
-    fn v_face_s_first_order(&self, i: usize, j: usize) -> f32 {
+    fn v_face_s_first_order_scalar(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * nx;
         let idx_s = i + (j - 1) * nx;
@@ -1299,6 +1379,18 @@ impl Model {
         } else {
             self.v[idx]
         }
+    }
+
+    #[inline(always)]
+    fn v_face_s_first_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
+        let nx = self.grid.nx;
+        let idx = i + j * nx;
+        let idx_s = i + (j - 1) * nx;
+        let v_current = Simd::from_slice(&self.v[idx..idx + LANES]);
+        let v_south = Simd::from_slice(&self.v[idx_s..idx_s + LANES]);
+        let v_avg = (v_current + v_south) * Simd::splat(0.5);
+        let mask = v_avg.simd_ge(Simd::splat(0.0));
+        mask.select(v_south, v_current)
     }
 
     #[inline(always)]
