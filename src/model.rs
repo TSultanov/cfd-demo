@@ -1,6 +1,6 @@
 use std::simd::cmp::SimdPartialOrd;
 use std::simd::num::SimdFloat;
-use std::simd::Simd;
+use std::simd::{Mask, Simd};
 
 use std::{
     sync::mpsc::{self, TryRecvError},
@@ -428,11 +428,11 @@ impl Model {
                         self.get_v_south(i, j).copy_to_slice(&mut self.u_v_s[idx..idx_end]);
                         self.u_face_n_second_order(i, j).copy_to_slice(&mut self.u_u_n[idx..idx_end]);
                         self.u_face_s_second_order(i, j).copy_to_slice(&mut self.u_u_s[idx..idx_end]);
+                        self.u_face_e_second_order(i, j).copy_to_slice(&mut self.u_u_e[idx..idx_end]);
 
                         for k in 0..LANES {
                             let idx = (i + k) + j * (nx + 1);
 
-                            self.u_u_e[idx] = self.u_face_e_second_order(i+k, j);
                             self.u_u_w[idx] = self.u_face_w_second_order(i+k, j);
                         }
                     }
@@ -902,21 +902,30 @@ impl Model {
     }
 
     #[inline(always)]
-    fn u_face_e_second_order(&self, i: usize, j: usize) -> f32 {
+    fn u_face_e_second_order(&self, i: usize, j: usize) -> Simd<f32, LANES> {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
         let idx_e = (i + 1) + j * (nx + 1);
-        if self.u[idx] >= 0.0 {
-            if i > 1 {
-                1.5 * self.u[idx] - 0.5 * self.u[idx - 1]
-            } else {
-                self.u[idx]
-            }
-        } else if (idx_e + 1) < self.u.len() && i < nx - 1 {
-            1.5 * self.u[idx_e] - 0.5 * self.u[idx_e + 1]
-        } else {
-            self.u[idx_e]
-        }
+        let idx_ee = (i + 2) + j * (nx + 1);
+        let idx_w = (i - 1) + j * (nx + 1);
+
+        // Load current and east u values as SIMD vectors.
+        let u_current = Simd::from_slice(&self.u[idx..idx + LANES]);
+        let u_west = Simd::from_slice(&self.u[idx_w..idx_w + LANES]);
+        let u_east = Simd::from_slice(&self.u[idx_e..idx_e + LANES]);
+        let u_east_east = Simd::from_slice(&self.u[idx_ee..idx_ee + LANES]);
+
+        // Preselect 1.5 * u[idx] - 0.5 * self.u[idx_w] if i > 1, else u[idx].
+        let mask_i: Mask<i32, LANES> = Simd::from_slice(&(i..i+LANES).collect::<Vec<_>>()).simd_gt(Simd::splat(1)).into();
+        let u_a = mask_i.select(Simd::splat(1.5) * u_current - Simd::splat(0.5) * u_west, u_current);
+
+        // Preselect 1.5 * u[idx_e] - 0.5 * u[idx_ee] if i < nx - 1, else self.u[idx_e]
+        let mask_i: Mask<i32, LANES> = Simd::from_slice(&(i..i+LANES).collect::<Vec<_>>()).simd_lt(Simd::splat(nx - 1)).into();
+        let u_b = mask_i.select(Simd::splat(1.5) * u_east - Simd::splat(0.5) * u_east_east, u_east);
+
+        // If u_currect >= 0.0, then u_a, else u_b.
+        let mask = u_a.simd_ge(Simd::splat(0.0));
+        mask.select(u_a, u_b)
     }
 
     #[inline(always)]
@@ -955,16 +964,18 @@ impl Model {
     fn u_face_w_second_order(&self, i: usize, j: usize) -> f32 {
         let nx = self.grid.nx;
         let idx = i + j * (nx + 1);
-        let idx_w = idx - 1;
+        let idx_w = (i - 1) + j * (nx + 1);
+        let idx_ww = (i - 2) + j * (nx + 1);
+        let idx_e = (i + 1) + j * (nx + 1);
         if self.u[idx_w] >= 0.0 {
             if i > 2 {
-                1.5 * self.u[idx_w] - 0.5 * self.u[idx_w - 1]
+                1.5 * self.u[idx_w] - 0.5 * self.u[idx_ww]
             } else {
                 self.u[idx_w]
             }
         } else {
             if i < nx {
-                1.5 * self.u[idx] - 0.5 * self.u[idx + 1]
+                1.5 * self.u[idx] - 0.5 * self.u[idx_e]
             } else {
                 self.u[idx]
             }
