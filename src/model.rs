@@ -314,8 +314,10 @@ impl Model {
         let mut max_pressure_residual = 0.0;
 
         // Perform the required number of substeps (PISO substeps)
+        let start = Instant::now();
         for _ in 0..self.substep_count {
             let start_time = Instant::now();
+            println!("");
             self.piso_step(dt_sub);
             let p_residual = self.last_pressure_residual;
             if p_residual > max_pressure_residual {
@@ -324,6 +326,7 @@ impl Model {
             let piso_time = start_time.elapsed();
             println!("piso time: {:?}", piso_time);
         }
+        println!("piso total time: {:?}", start.elapsed());
 
         // Compute residual differences between the updated velocity fields and their old values.
         let max_residual_u: f32 = self
@@ -398,6 +401,7 @@ impl Model {
 
         // ---------------- Predictor for u ----------------
         // Loop over internal u faces.
+        let start = Instant::now();
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
                 for j in 1..(ny - 1) {
@@ -492,9 +496,11 @@ impl Model {
                 self.u_star[idx] = self.u[idx] + dt_sub * (-convective + nu * laplace);
             }
         }
+        println!("u_star time: {:?}", start.elapsed());
 
         // ---------------- Predictor for v ----------------
         // Loop over internal v faces.
+        let start = Instant::now();
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
                 for j in 1..ny {
@@ -571,9 +577,11 @@ impl Model {
                 self.v_star[idx] = self.v[idx] + dt_sub * (-convective + nu * laplace);
             }
         }
+        println!("v_star time: {:?}", start.elapsed());
 
         // ---------------- Pressure Correction (MAC form) ----------------
         // Compute the divergence (rhs) on pressure cells.
+        let start_time = Instant::now();
         for j in 0..ny {
             for i in 0..nx {
                 let idx = i + j * nx;
@@ -584,6 +592,7 @@ impl Model {
                 self.rhs[idx] = ((u_right - u_left) / dx + (v_top - v_bottom) / dy) / dt_sub;
             }
         }
+        println!("rhs time: {:?}", start_time.elapsed());
 
         let start_time = Instant::now();
 
@@ -675,16 +684,18 @@ impl Model {
         let jacobi_omega = 0.7;
         let pressure_tolerance = 1e-6;
         let iterations = 50;
-        let denom = 2.0 / (dx * dx) + 2.0 / (dy * dy);
         let mut max_error = 0.0;
+        // Precompute constants.
+        let dx_sq = dx * dx;
+        let dx_sq_v = Simd::splat(dx_sq);
+        let dy_sq = dy * dy;
+        let dy_sq_v = Simd::splat(dy_sq);
+        let jacobi_omega_v = Simd::splat(jacobi_omega);
+        let jacobi_omega_o_m_v = Simd::splat(1.0 - jacobi_omega);
+        let denom = 2.0 / (dx * dx) + 2.0 / (dy * dy);
+        let denom_v = Simd::splat(denom);
         for _iter in 0..iterations {
-            self.p_prime_new.fill(0.0);
             for j in 1..(ny - 1) {
-                // Precompute constants as scalars.
-                let dx_sq = dx * dx;
-                let dy_sq = dy * dy;
-                let jacobi_omega_v = Simd::splat(jacobi_omega);
-                let jacobi_omega_o_m_v = Simd::splat(1.0 - jacobi_omega);
                 // Process indices in SIMD chunks.
                 for i in (1..(nx - 1)).step_by(LANES) {
                     let stride = j * nx + i;
@@ -717,9 +728,9 @@ impl Model {
                     let rhs    = Simd::from_slice(&self.rhs[stride..(stride + LANES)]);
 
                     // Compute the update using SIMD operations.
-                    let horizontal = (right + left) / Simd::splat(dx_sq);
-                    let vertical   = (top + bot) / Simd::splat(dy_sq);
-                    let p_update = (horizontal + vertical - rhs) / Simd::splat(denom);
+                    let horizontal = (right + left) / dx_sq_v;
+                    let vertical   = (top + bot) / dy_sq_v;
+                    let p_update = (horizontal + vertical - rhs) / denom_v;
 
                     // Apply relaxation parameter.
                     let new_val = jacobi_omega_v * p_update
@@ -738,7 +749,6 @@ impl Model {
                     let p_prime = Simd::from_slice(&self.p_prime[idx..idx_end]);
                     let error = (p_prime_new - p_prime).abs().reduce_max();
 
-                    // let error = (self.p_prime_new[idx] - self.p_prime[idx]).abs();
                     if error > max_error {
                         max_error = error;
                     }
@@ -1404,7 +1414,7 @@ impl Model {
                 if !paused {
                     self.update();
                     residuals_sender.send(self.get_residuals()).unwrap();
-                    println!("Step time: {:?}", start.elapsed());
+                    println!("====== Step time: {:?} ======", start.elapsed());
                 } else {
                     thread::sleep(Duration::from_millis(16));
                 }
