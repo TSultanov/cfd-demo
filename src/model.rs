@@ -735,6 +735,7 @@ impl Model {
         // ---------------- Pressure Correction (MAC form) ----------------
         // Compute the divergence (rhs) on pressure cells.
         let start_time = Instant::now();
+        let dt_sub_v = Simd::splat(dt_sub);
         for j in 0..ny {
             for i in (0..nx).step_by(LANES) {
                 if i + LANES > nx {
@@ -767,7 +768,7 @@ impl Model {
                 let v_s = Simd::from_slice(&self.v_star[idx_s..idx_s + LANES]);
 
                 // Compute the divergence.
-                let rhs = ((u_e - u_w) / dx_v + (v_n - v_s) / dy_v) / Simd::splat(dt_sub);
+                let rhs = ((u_e - u_w) / dx_v + (v_n - v_s) / dy_v) / dt_sub_v;
                 rhs.copy_to_slice(&mut self.rhs[idx..idx + LANES]);
             }
         }
