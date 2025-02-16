@@ -270,7 +270,6 @@ impl Model {
             }
         }
 
-
         Self {
             grid,
             dt: params.dt,
@@ -516,7 +515,8 @@ impl Model {
                 let idx_end = (i + LANES) + j * (nx + 1);
 
                 let obstacle_mask_u = Simd::from_slice(&self.obstacle_mask_u[idx..idx_end]);
-                let obstacle_mask_u: Mask<i32, LANES> = obstacle_mask_u.simd_eq(Simd::splat(1)).into();
+                let obstacle_mask_u: Mask<i32, LANES> =
+                    obstacle_mask_u.simd_eq(Simd::splat(1)).into();
 
                 let convective = {
                     let u_e: Simd<f32, LANES> = Simd::from_slice(&self.u_u_e[idx..idx_end]);
@@ -541,15 +541,13 @@ impl Model {
                     let idx_s = i + (j - 1) * (nx + 1);
                     let idx_n = i + (j + 1) * (nx + 1);
 
-                    let u_e: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_e..idx_e+LANES]);
-                    let u_w: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_w..idx_w+LANES]);
-                    let u_n: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_n..idx_n+LANES]);
-                    let u_s: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_s..idx_s+LANES]);
+                    let u_e: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_e..idx_e + LANES]);
+                    let u_w: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_w..idx_w + LANES]);
+                    let u_n: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_n..idx_n + LANES]);
+                    let u_s: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_s..idx_s + LANES]);
 
                     (u_e - Simd::splat(2.0) * u + u_w) / (dx_v * dx_v)
-                        + (u_n - Simd::splat(2.0) * u
-                            + u_s)
-                            / (dy_v * dy_v)
+                        + (u_n - Simd::splat(2.0) * u + u_s) / (dy_v * dy_v)
                 };
 
                 let u_star = u + Simd::splat(dt_sub) * (-convective + Simd::splat(nu) * laplace);
@@ -653,32 +651,94 @@ impl Model {
         }
 
         for j in 1..ny {
-            for i in 1..(nx - 1) {
+            for i in (1..(nx - 1)).step_by(LANES) {
                 let idx = i + j * nx;
-                if self.obstacle_mask_v[idx] == 1 {
-                    self.v_star[idx] = 0.0;
+
+                if i + LANES > nx - 1 {
+                    for k in 0..(nx - i) {
+                        let idx = i + k + j * nx;
+                        if self.obstacle_mask_v[idx] == 1 {
+                            self.v_star[idx] = 0.0;
+                            continue;
+                        }
+                        // For v the east/west fluxes also involve the u–field.
+
+                        let convective = {
+                            let u_e = self.v_u_e[idx];
+                            let u_w = self.v_u_w[idx];
+                            let v_n = self.v_v_n[idx];
+                            let v_s = self.v_v_s[idx];
+                            let v_e = self.v_v_e[idx];
+                            let v_w = self.v_v_w[idx];
+
+                            let f_e = u_e * v_e;
+                            let f_w = u_w * v_w;
+                            let f_n = v_n * v_n;
+                            let f_s = v_s * v_s;
+                            (f_e - f_w) / dx + (f_n - f_s) / dy
+                        };
+
+                        let v = self.v[idx];
+
+                        let laplace = {
+                            let idx_e = i + 1 + j * nx;
+                            let idx_w = i - 1 + j * nx;
+                            let idx_n = i + (j + 1) * nx;
+                            let idx_s = i + (j - 1) * nx;
+
+                            let v_e = self.v[idx_e];
+                            let v_w = self.v[idx_w];
+                            let v_n = self.v[idx_n];
+                            let v_s = self.v[idx_s];
+
+                            (v_e - 2.0 * v + v_w) / (dx * dx) + (v_n - 2.0 * v + v_s) / (dy * dy)
+                        };
+
+                        self.v_star[idx] = self.v[idx] + dt_sub * (-convective + nu * laplace);
+                    }
+
                     continue;
                 }
-                // For v the east/west fluxes also involve the u–field.
 
-                let u_e = self.v_u_e[idx];
-                let u_w = self.v_u_w[idx];
-                let v_n = self.v_v_n[idx];
-                let v_s = self.v_v_s[idx];
-                let v_e = self.v_v_e[idx];
-                let v_w = self.v_v_w[idx];
+                let obstacle_mask_v = Simd::from_slice(&self.obstacle_mask_v[idx..idx + LANES]);
+                let obstacle_mask_v: Mask<i32, LANES> =
+                    obstacle_mask_v.simd_eq(Simd::splat(1)).into();
 
-                let f_e = u_e * v_e;
-                let f_w = u_w * v_w;
-                let f_n = v_n * v_n;
-                let f_s = v_s * v_s;
-                let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
-                let laplace = (self.v[(i + 1) + j * nx] - 2.0 * self.v[idx]
-                    + self.v[(i - 1) + j * nx])
-                    / (dx * dx)
-                    + (self.v[i + (j + 1) * nx] - 2.0 * self.v[idx] + self.v[i + (j - 1) * nx])
-                        / (dy * dy);
-                self.v_star[idx] = self.v[idx] + dt_sub * (-convective + nu * laplace);
+                let convective = {
+                    let u_e: Simd<f32, LANES> = Simd::from_slice(&self.v_u_e[idx..idx + LANES]);
+                    let u_w: Simd<f32, LANES> = Simd::from_slice(&self.v_u_w[idx..idx + LANES]);
+                    let v_n: Simd<f32, LANES> = Simd::from_slice(&self.v_v_n[idx..idx + LANES]);
+                    let v_s: Simd<f32, LANES> = Simd::from_slice(&self.v_v_s[idx..idx + LANES]);
+                    let v_e: Simd<f32, LANES> = Simd::from_slice(&self.v_v_e[idx..idx + LANES]);
+                    let v_w: Simd<f32, LANES> = Simd::from_slice(&self.v_v_w[idx..idx + LANES]);
+
+                    let f_e = u_e * v_e;
+                    let f_w = u_w * v_w;
+                    let f_n = v_n * v_n;
+                    let f_s = v_s * v_s;
+                    (f_e - f_w) / dx_v + (f_n - f_s) / dy_v
+                };
+
+                let v: Simd<f32, LANES> = Simd::from_slice(&self.v[idx..idx + LANES]);
+
+                let laplace = {
+                    let idx_e = i + 1 + j * nx;
+                    let idx_w = i - 1 + j * nx;
+                    let idx_n = i + (j + 1) * nx;
+                    let idx_s = i + (j - 1) * nx;
+
+                    let v_e: Simd<f32, LANES> = Simd::from_slice(&self.v[idx_e..idx_e + LANES]);
+                    let v_w: Simd<f32, LANES> = Simd::from_slice(&self.v[idx_w..idx_w + LANES]);
+                    let v_n: Simd<f32, LANES> = Simd::from_slice(&self.v[idx_n..idx_n + LANES]);
+                    let v_s: Simd<f32, LANES> = Simd::from_slice(&self.v[idx_s..idx_s + LANES]);
+
+                    (v_e - Simd::splat(2.0) * v + v_w) / (dx_v * dx_v)
+                        + (v_n - Simd::splat(2.0) * v + v_s) / (dy_v * dy_v)
+                };
+
+                let v_star = v + Simd::splat(dt_sub) * (-convective + Simd::splat(nu) * laplace);
+                let v_star = obstacle_mask_v.select(Simd::splat(0.0), v_star);
+                v_star.copy_to_slice(&mut self.v_star[idx..idx + LANES]);
             }
         }
         println!("v_star time: {:?}", start.elapsed());
