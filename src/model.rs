@@ -191,8 +191,6 @@ pub struct Model {
     obstacle_coords: Vec<(usize, usize)>,
 
     // Previous fields (for extrapolation and residual computation)
-    pub u_prev: Vec<f32>,
-    pub v_prev: Vec<f32>,
     pub u_old: Vec<f32>,
     pub v_old: Vec<f32>,
 
@@ -292,8 +290,8 @@ impl Model {
             obstacle_mask_u,
             obstacle_mask_v,
             obstacle_coords,
-            u_prev: u.clone(),
-            v_prev: v.clone(),
+            // u_prev: u.clone(),
+            // v_prev: v.clone(),
             u_old: u.clone(),
             v_old: v.clone(),
 
@@ -326,19 +324,6 @@ impl Model {
     /// Implements the extrapolation, multiple substeps (the PISO algorithm)
     /// and automatic dt adjustment.
     pub fn update(&mut self) {
-        // Extrapolate previous velocities if not at the very first step.
-        if self.simulation_step > 0 {
-            let relaxation_factor = 0.5;
-            for i in 0..self.u.len() {
-                self.u[i] =
-                    (1.0 + relaxation_factor) * self.u[i] - relaxation_factor * self.u_prev[i];
-            }
-            for i in 0..self.v.len() {
-                self.v[i] =
-                    (1.0 + relaxation_factor) * self.v[i] - relaxation_factor * self.v_prev[i];
-            }
-        }
-
         // Save current fields for residual computation.
         self.u_old.copy_from_slice(&self.u);
         self.v_old.copy_from_slice(&self.v);
@@ -418,8 +403,8 @@ impl Model {
         };
 
         // Update previous fields for the next time step
-        self.u_prev.copy_from_slice(&self.u);
-        self.v_prev.copy_from_slice(&self.v);
+        // self.u_prev.copy_from_slice(&self.u);
+        // self.v_prev.copy_from_slice(&self.v);
     }
 
     /// The core PISO substep.
