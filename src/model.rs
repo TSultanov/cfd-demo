@@ -494,7 +494,9 @@ impl Model {
                 }
             }
         }
+        println!("u_face time: {:?}", start.elapsed());
 
+        let start = Instant::now();
         let dx_v = Simd::splat(dx);
         let dy_v = Simd::splat(dy);
 
@@ -638,7 +640,9 @@ impl Model {
                 }
             }
         }
+        println!("v_face time: {:?}", start.elapsed());
 
+        let start = Instant::now();
         for j in 1..ny {
             for i in (1..(nx - 1)).step_by(LANES) {
                 let idx = i + j * nx;
