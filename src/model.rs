@@ -188,6 +188,7 @@ pub struct Model {
 
     obstacle_mask_u: Vec<u8>,
     obstacle_mask_v: Vec<u8>,
+    obstacle_coords: Vec<(usize, usize)>,
 
     // Previous fields (for extrapolation and residual computation)
     pub u_prev: Vec<f32>,
@@ -243,6 +244,7 @@ impl Model {
         // Create and populate the obstacle mask.
         let mut obstacle_mask_u = vec![0; size_u];
         let mut obstacle_mask_v = vec![0; size_v];
+        let mut obstacle_coords = vec![];
         if let Some(obstacle) = &grid.obstacle {
             for j in 0..ny {
                 for i in 0..nx {
@@ -265,6 +267,7 @@ impl Model {
                         if j < ny {
                             obstacle_mask_v[i + (j + 1) * nx] = 1;
                         }
+                        obstacle_coords.push((i, j));
                     }
                 }
             }
@@ -288,6 +291,7 @@ impl Model {
 
             obstacle_mask_u,
             obstacle_mask_v,
+            obstacle_coords,
             u_prev: u.clone(),
             v_prev: v.clone(),
             u_old: u.clone(),
@@ -1004,19 +1008,11 @@ impl Model {
             self.v[i + ny * nx] = 0.0;
         }
         // Enforce zero velocity in the obstacle region (by checking cell center positions).
-        for j in 0..ny {
-            for i in 0..(nx + 1) {
-                if self.obstacle_mask_u[i + j * (nx + 1)] == 1 {
-                    self.u[i + j * (nx + 1)] = 0.0;
-                }
-            }
-        }
-        for j in 0..(ny + 1) {
-            for i in 0..nx {
-                if self.obstacle_mask_v[i + j * nx] == 1 {
-                    self.v[i + j * nx] = 0.0;
-                }
-            }
+        for (i, j) in &self.obstacle_coords {
+            let idx_u = i + j * (nx + 1);
+            let idx_v = i + j * nx;
+            self.u[idx_u] = 0.0;
+            self.v[idx_v] = 0.0;
         }
     }
 
