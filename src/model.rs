@@ -1,4 +1,5 @@
 use std::simd::cmp::SimdPartialOrd;
+use std::simd::num::SimdFloat;
 use std::simd::Simd;
 
 use std::{
@@ -632,7 +633,7 @@ impl Model {
                 self.last_pressure_residual = max_error;
             }
             PressureSolver::Jacobi => {
-                let residual = self.jacobi_pressure(denom, dx, dy, nx, ny);
+                let residual = self.jacobi_pressure( dx, dy, nx, ny);
                 self.last_pressure_residual = residual;
             }
         }
@@ -669,41 +670,84 @@ impl Model {
 
     /// A helper for the Jacobi pressure correction solver.
     #[inline(never)]
-    fn jacobi_pressure(&mut self, denom: f32, dx: f32, dy: f32, nx: usize, ny: usize) -> f32 {
+    fn jacobi_pressure(&mut self, dx: f32, dy: f32, nx: usize, ny: usize) -> f32 {
         self.p_prime.fill(0.0);
         let jacobi_omega = 0.7;
         let pressure_tolerance = 1e-6;
         let iterations = 50;
+        let denom = 2.0 / (dx * dx) + 2.0 / (dy * dy);
         let mut max_error = 0.0;
         for _iter in 0..iterations {
             self.p_prime_new.fill(0.0);
             for j in 1..(ny - 1) {
-                for i in 1..(nx - 1) {
-                    let idx = i + j * nx;
-                    let p_update = ((self.p_prime[idx + 1] + self.p_prime[idx - 1]) / (dx * dx)
-                        + (self.p_prime[i + (j + 1) * nx] + self.p_prime[i + (j - 1) * nx])
-                            / (dy * dy)
-                        - self.rhs[idx])
-                        / denom;
-                    self.p_prime_new[idx] =
-                        jacobi_omega * p_update + (1.0 - jacobi_omega) * self.p_prime[idx];
+                // Precompute constants as scalars.
+                let dx_sq = dx * dx;
+                let dy_sq = dy * dy;
+                let jacobi_omega_v = Simd::splat(jacobi_omega);
+                let jacobi_omega_o_m_v = Simd::splat(1.0 - jacobi_omega);
+                // Process indices in SIMD chunks.
+                for i in (1..(nx - 1)).step_by(LANES) {
+                    let stride = j * nx + i;
+
+                    if i + LANES > nx - 1 {
+                        // Run scalar code for the last chunk.
+                        for k in 0..(nx - i) {
+                            let idx = stride + k;
+                            let right = self.p_prime[idx + 1];
+                            let left = self.p_prime[idx - 1];
+                            let top = self.p_prime[idx + nx];
+                            let bot = self.p_prime[idx - nx];
+                            let center = self.p_prime[idx];
+                            let rhs = self.rhs[idx];
+                            let horizontal = (right + left) / dx_sq;
+                            let vertical = (top + bot) / dy_sq;
+                            let p_update = (horizontal + vertical - rhs) / denom;
+                            let new_val = jacobi_omega * p_update + (1.0 - jacobi_omega) * center;
+                            self.p_prime_new[idx] = new_val;
+                        }
+                        continue;
+                    }
+
+                    // Load neighbor values into SIMD vectors.
+                    let right: Simd<f32, LANES> = Simd::from_slice(&self.p_prime[(stride + 1)..(stride + 1 + LANES)]);
+                    let left  = Simd::from_slice(&self.p_prime[(stride - 1)..(stride - 1 + LANES)]);
+                    let top   = Simd::from_slice(&self.p_prime[(i + (j + 1) * nx)..(i + (j + 1) * nx + LANES)]);
+                    let bot   = Simd::from_slice(&self.p_prime[(i + (j - 1) * nx)..(i + (j - 1) * nx + LANES)]);
+                    let center = Simd::from_slice(&self.p_prime[stride..(stride + LANES)]);
+                    let rhs    = Simd::from_slice(&self.rhs[stride..(stride + LANES)]);
+
+                    // Compute the update using SIMD operations.
+                    let horizontal = (right + left) / Simd::splat(dx_sq);
+                    let vertical   = (top + bot) / Simd::splat(dy_sq);
+                    let p_update = (horizontal + vertical - rhs) / Simd::splat(denom);
+
+                    // Apply relaxation parameter.
+                    let new_val = jacobi_omega_v * p_update
+                        + jacobi_omega_o_m_v * center;
+
+                    // Store the updated values back.
+                    new_val.copy_to_slice(&mut self.p_prime_new[stride..(stride + LANES)]);
                 }
             }
             max_error = 0.0;
             for j in 1..(ny - 1) {
-                for i in 1..(nx - 1) {
+                for i in (1..(nx - 1)).step_by(LANES) {
                     let idx = i + j * nx;
-                    let error = (self.p_prime_new[idx] - self.p_prime[idx]).abs();
+                    let idx_end = (i + LANES) + j * nx;
+                    let p_prime_new: Simd<f32, LANES> = Simd::from_slice(&self.p_prime_new[idx..idx_end]);
+                    let p_prime = Simd::from_slice(&self.p_prime[idx..idx_end]);
+                    let error = (p_prime_new - p_prime).abs().reduce_max();
+
+                    // let error = (self.p_prime_new[idx] - self.p_prime[idx]).abs();
                     if error > max_error {
                         max_error = error;
                     }
-                    self.p_prime[idx] = self.p_prime_new[idx];
+                    self.p_prime[idx..idx_end].copy_from_slice(&self.p_prime_new[idx..idx_end]);
                 }
             }
             for i in 0..nx {
                 self.p_prime[i] = self.p_prime[i + nx]; // bottom
-                self.p_prime[i + (ny - 1) * nx] = self.p_prime[i + (ny - 2) * nx];
-                // top
+                self.p_prime[i + (ny - 1) * nx] = self.p_prime[i + (ny - 2) * nx]; // top
             }
             for j in 0..ny {
                 self.p_prime[j * nx] = self.p_prime[1 + j * nx]; // left
