@@ -1,4 +1,4 @@
-use std::simd::cmp::SimdPartialOrd;
+use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use std::simd::num::SimdFloat;
 use std::simd::{Mask, Simd};
 
@@ -186,8 +186,8 @@ pub struct Model {
     /// Pressure field: size = nx*ny.
     pub p: Vec<f32>,
 
-    obstacle_mask_u: Vec<bool>,
-    obstacle_mask_v: Vec<bool>,
+    obstacle_mask_u: Vec<u8>,
+    obstacle_mask_v: Vec<u8>,
 
     // Previous fields (for extrapolation and residual computation)
     pub u_prev: Vec<f32>,
@@ -241,8 +241,8 @@ impl Model {
         let p = vec![0.0; size_p];
 
         // Create and populate the obstacle mask.
-        let mut obstacle_mask_u = vec![false; size_u];
-        let mut obstacle_mask_v = vec![false; size_v];
+        let mut obstacle_mask_u = vec![0; size_u];
+        let mut obstacle_mask_v = vec![0; size_v];
         if let Some(obstacle) = &grid.obstacle {
             for j in 0..ny {
                 for i in 0..nx {
@@ -254,16 +254,16 @@ impl Model {
                     if distance < obstacle.radius {
                         // Inside the obstacle.
                         if i > 0 {
-                            obstacle_mask_u[i + j * (nx + 1)] = true;
+                            obstacle_mask_u[i + j * (nx + 1)] = 1;
                         }
                         if i < nx {
-                            obstacle_mask_u[(i + 1) + j * (nx + 1)] = true;
+                            obstacle_mask_u[(i + 1) + j * (nx + 1)] = 1;
                         }
                         if j > 0 {
-                            obstacle_mask_v[i + j * nx] = true;
+                            obstacle_mask_v[i + j * nx] = 1;
                         }
                         if j < ny {
-                            obstacle_mask_v[i + (j + 1) * nx] = true;
+                            obstacle_mask_v[i + (j + 1) * nx] = 1;
                         }
                     }
                 }
@@ -507,35 +507,54 @@ impl Model {
             }
         }
 
+        let dx_v = Simd::splat(dx);
+        let dy_v = Simd::splat(dy);
+
         for j in 1..(ny - 1) {
-            for i in 1..nx {
+            for i in (1..nx).step_by(LANES) {
                 let idx = i + j * (nx + 1);
-                if self.obstacle_mask_u[idx] {
-                    self.u_star[idx] = 0.0;
-                    continue;
-                }
+                let idx_end = (i + LANES) + j * (nx + 1);
 
-                let u_e = self.u_u_e[idx];
-                let u_w = self.u_u_w[idx];
-                let v_n = self.u_v_n[idx];
-                let v_s = self.u_v_s[idx];
-                let u_n = self.u_u_n[idx];
-                let u_s = self.u_u_s[idx];
+                let obstacle_mask_u = Simd::from_slice(&self.obstacle_mask_u[idx..idx_end]);
+                let obstacle_mask_u: Mask<i32, LANES> = obstacle_mask_u.simd_eq(Simd::splat(1)).into();
 
-                let f_e = u_e * u_e;
-                let f_w = u_w * u_w;
+                let convective = {
+                    let u_e: Simd<f32, LANES> = Simd::from_slice(&self.u_u_e[idx..idx_end]);
+                    let u_w: Simd<f32, LANES> = Simd::from_slice(&self.u_u_w[idx..idx_end]);
+                    let v_n: Simd<f32, LANES> = Simd::from_slice(&self.u_v_n[idx..idx_end]);
+                    let v_s: Simd<f32, LANES> = Simd::from_slice(&self.u_v_s[idx..idx_end]);
+                    let u_n: Simd<f32, LANES> = Simd::from_slice(&self.u_u_n[idx..idx_end]);
+                    let u_s: Simd<f32, LANES> = Simd::from_slice(&self.u_u_s[idx..idx_end]);
 
-                let f_n = v_n * u_n;
-                let f_s = v_s * u_s;
-                let convective = (f_e - f_w) / dx + (f_n - f_s) / dy;
+                    let f_e = u_e * u_e;
+                    let f_w = u_w * u_w;
 
-                let idx_e = idx + 1;
-                let idx_w = idx - 1;
-                let laplace = (self.u[idx_e] - 2.0 * self.u[idx] + self.u[idx_w]) / (dx * dx)
-                    + (self.u[i + (j + 1) * (nx + 1)] - 2.0 * self.u[idx]
-                        + self.u[i + (j - 1) * (nx + 1)])
-                        / (dy * dy);
-                self.u_star[idx] = self.u[idx] + dt_sub * (-convective + nu * laplace);
+                    let f_n = v_n * u_n;
+                    let f_s = v_s * u_s;
+                    (f_e - f_w) / dx_v + (f_n - f_s) / dy_v
+                };
+
+                let u: Simd<f32, LANES> = Simd::from_slice(&self.u[idx..idx_end]);
+                let laplace = {
+                    let idx_e = (i + 1) + j * (nx + 1);
+                    let idx_w = (i - 1) + j * (nx + 1);
+                    let idx_s = i + (j - 1) * (nx + 1);
+                    let idx_n = i + (j + 1) * (nx + 1);
+
+                    let u_e: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_e..idx_e+LANES]);
+                    let u_w: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_w..idx_w+LANES]);
+                    let u_n: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_n..idx_n+LANES]);
+                    let u_s: Simd<f32, LANES> = Simd::from_slice(&self.u[idx_s..idx_s+LANES]);
+
+                    (u_e - Simd::splat(2.0) * u + u_w) / (dx_v * dx_v)
+                        + (u_n - Simd::splat(2.0) * u
+                            + u_s)
+                            / (dy_v * dy_v)
+                };
+
+                let u_star = u + Simd::splat(dt_sub) * (-convective + Simd::splat(nu) * laplace);
+                let u_star = obstacle_mask_u.select(Simd::splat(0.0), u_star);
+                u_star.copy_to_slice(&mut self.u_star[idx..idx_end]);
             }
         }
         println!("u_star time: {:?}", start.elapsed());
@@ -636,7 +655,7 @@ impl Model {
         for j in 1..ny {
             for i in 1..(nx - 1) {
                 let idx = i + j * nx;
-                if self.obstacle_mask_v[idx] {
+                if self.obstacle_mask_v[idx] == 1 {
                     self.v_star[idx] = 0.0;
                     continue;
                 }
@@ -901,14 +920,14 @@ impl Model {
         // Enforce zero velocity in the obstacle region (by checking cell center positions).
         for j in 0..ny {
             for i in 0..(nx + 1) {
-                if self.obstacle_mask_u[i + j * (nx + 1)] {
+                if self.obstacle_mask_u[i + j * (nx + 1)] == 1 {
                     self.u[i + j * (nx + 1)] = 0.0;
                 }
             }
         }
         for j in 0..(ny + 1) {
             for i in 0..nx {
-                if self.obstacle_mask_v[i + j * nx] {
+                if self.obstacle_mask_v[i + j * nx] == 1 {
                     self.v[i + j * nx] = 0.0;
                 }
             }
