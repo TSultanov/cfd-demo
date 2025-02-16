@@ -680,7 +680,6 @@ impl Model {
     /// A helper for the Jacobi pressure correction solver.
     #[inline(never)]
     fn jacobi_pressure(&mut self, dx: f32, dy: f32, nx: usize, ny: usize) -> f32 {
-        self.p_prime.fill(0.0);
         let jacobi_omega = 0.7;
         let pressure_tolerance = 1e-6;
         let iterations = 50;
@@ -695,6 +694,7 @@ impl Model {
         let denom = 2.0 / (dx * dx) + 2.0 / (dy * dy);
         let denom_v = Simd::splat(denom);
         for _iter in 0..iterations {
+            max_error = 0.0;
             for j in 1..(ny - 1) {
                 // Process indices in SIMD chunks.
                 for i in (1..(nx - 1)).step_by(LANES) {
@@ -736,25 +736,18 @@ impl Model {
                     let new_val = jacobi_omega_v * p_update
                         + jacobi_omega_o_m_v * center;
 
+                    let error = (new_val - center).abs().reduce_max();
+                    if error > max_error {
+                        max_error = error;
+                    }
+
                     // Store the updated values back.
                     new_val.copy_to_slice(&mut self.p_prime_new[stride..(stride + LANES)]);
                 }
             }
-            max_error = 0.0;
-            for j in 1..(ny - 1) {
-                for i in (1..(nx - 1)).step_by(LANES) {
-                    let idx = i + j * nx;
-                    let idx_end = (i + LANES) + j * nx;
-                    let p_prime_new: Simd<f32, LANES> = Simd::from_slice(&self.p_prime_new[idx..idx_end]);
-                    let p_prime = Simd::from_slice(&self.p_prime[idx..idx_end]);
-                    let error = (p_prime_new - p_prime).abs().reduce_max();
 
-                    if error > max_error {
-                        max_error = error;
-                    }
-                    self.p_prime[idx..idx_end].copy_from_slice(&self.p_prime_new[idx..idx_end]);
-                }
-            }
+            std::mem::swap(&mut self.p_prime, &mut self.p_prime_new);
+
             for i in 0..nx {
                 self.p_prime[i] = self.p_prime[i + nx]; // bottom
                 self.p_prime[i + (ny - 1) * nx] = self.p_prime[i + (ny - 2) * nx]; // top
