@@ -184,11 +184,6 @@ impl eframe::App for App {
                                 PressureSolver::Jacobi,
                                 "Jacobi",
                             );
-                            ui.selectable_value(
-                                &mut self.simulation_params.pressure_solver,
-                                PressureSolver::SOR,
-                                "SOR",
-                            );
                         });
                 }
             });
