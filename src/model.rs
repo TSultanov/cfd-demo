@@ -27,6 +27,7 @@ pub struct Residuals {
     pub p: f32,
     pub u: f32,
     pub v: f32,
+    pub step_time: Duration,
 }
 
 /// A snapshot structure to copy the data needed for visualization and logging.
@@ -207,6 +208,7 @@ pub struct Model {
     pub last_u_residual: f32,
     pub last_v_residual: f32,
     pub simulation_time: f32,
+    pub last_step_time: Duration,
 }
 
 impl Model {
@@ -289,6 +291,7 @@ impl Model {
             last_u_residual: 0.0,
             last_v_residual: 0.0,
             simulation_time: 0.0,
+            last_step_time: Duration::from_secs(0),
         }
     }
 
@@ -296,6 +299,7 @@ impl Model {
     /// Implements the extrapolation, multiple substeps (the PISO algorithm)
     /// and automatic dt adjustment.
     pub fn update(&mut self) {
+        let step_start = Instant::now();
         // Save current fields for residual computation.
         self.u_old.copy_from_slice(&self.u);
         self.v_old.copy_from_slice(&self.v);
@@ -373,10 +377,7 @@ impl Model {
         } else {
             new_dt
         };
-
-        // Update previous fields for the next time step
-        // self.u_prev.copy_from_slice(&self.u);
-        // self.v_prev.copy_from_slice(&self.v);
+        self.last_step_time = step_start.elapsed();
     }
 
     #[inline(always)]
@@ -805,8 +806,8 @@ impl Model {
     /// A helper for the Jacobi pressure correction solver.
     #[inline(never)]
     fn jacobi_pressure(&mut self, dx: f32, dy: f32, nx: usize, ny: usize) -> f32 {
-        let jacobi_omega = 0.7;
-        let pressure_tolerance = 1e-6;
+        let jacobi_omega = 0.9;
+        let pressure_tolerance = 1e-3;
         let iterations = 50;
         let mut max_error = 0.0;
         // Precompute constants.
@@ -887,9 +888,11 @@ impl Model {
                 self.p_prime[(nx - 1) + j * nx] = 0.0; // outlet
             }
             if max_error < pressure_tolerance {
+                println!("Jacobi solver converged after {} iterations.", _iter);
                 break;
             }
         }
+        println!("Jacobi solver max error: {}", max_error);
         self.last_pressure_residual = max_error;
         max_error
     }
@@ -1398,6 +1401,7 @@ impl Model {
             u: self.last_u_residual,
             v: self.last_v_residual,
             p: self.last_pressure_residual,
+            step_time: self.last_step_time,
         }
     }
 
