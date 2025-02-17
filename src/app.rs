@@ -161,11 +161,6 @@ impl eframe::App for App {
                                 VelocityScheme::SecondOrder,
                                 "SecondOrder Upwind",
                             );
-                            ui.selectable_value(
-                                &mut self.simulation_params.velocity_scheme,
-                                VelocityScheme::Quick,
-                                "QUICK Scheme",
-                            );
                         });
                     egui::ComboBox::from_label("Inlet Profile")
                         .selected_text(format!("{:?}", self.simulation_params.inlet_profile))
