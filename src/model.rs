@@ -28,6 +28,7 @@ pub struct Residuals {
     pub u: f32,
     pub v: f32,
     pub step_time: Duration,
+    pub piso_substeps: usize,
 }
 
 /// A snapshot structure to copy the data needed for visualization and logging.
@@ -209,6 +210,7 @@ pub struct Model {
     pub last_v_residual: f32,
     pub simulation_time: f32,
     pub last_step_time: Duration,
+    pub last_piso_substeps_count: usize,
 }
 
 impl Model {
@@ -292,6 +294,7 @@ impl Model {
             last_v_residual: 0.0,
             simulation_time: 0.0,
             last_step_time: Duration::from_secs(0),
+            last_piso_substeps_count: 0,
         }
     }
 
@@ -312,20 +315,17 @@ impl Model {
             self.current_inlet_velocity = self.target_inlet_velocity;
         }
         let dt_sub = self.dt / self.substep_count as f32;
-        let mut max_pressure_residual = 0.0;
 
         // Perform the required number of substeps (PISO substeps)
+        self.last_piso_substeps_count = self.substep_count;
         let start = Instant::now();
         for _ in 0..self.substep_count {
             let start_time = Instant::now();
             println!("");
             self.piso_step(dt_sub);
             let p_residual = self.last_pressure_residual;
-            if p_residual > max_pressure_residual {
-                max_pressure_residual = p_residual;
-            }
             let piso_time = start_time.elapsed();
-            println!("piso time: {:?}", piso_time);
+            println!("piso time: {:?}, p_residual: {:.3e}", piso_time, p_residual);
         }
         println!("piso total time: {:?}", start.elapsed());
 
@@ -352,7 +352,7 @@ impl Model {
         // Adjust the number of substeps if the error norm is too high.
         let error_norm: f32 = max_residual_u
             .max(max_residual_v)
-            .max(max_pressure_residual);
+            .max(self.last_pressure_residual);
         let tolerance = 1e-3;
         if error_norm > tolerance {
             let factor = error_norm / tolerance;
@@ -1402,6 +1402,7 @@ impl Model {
             v: self.last_v_residual,
             p: self.last_pressure_residual,
             step_time: self.last_step_time,
+            piso_substeps: self.last_piso_substeps_count,
         }
     }
 

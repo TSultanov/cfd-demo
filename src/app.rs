@@ -423,7 +423,7 @@ impl eframe::App for App {
 
                 for message in new_log_messages {
                     let new_message = format!(
-                        "Step: {}, Time: {:.3} s, dt: {:.3e} s, Pressure Residual: {:.3e}, U Residual: {:.3e}, V Residual: {:.3e}, Step computed in {:?}",
+                        "Step: {}, Time: {:.3} s, dt: {:.3e} s, Pressure Residual: {:.3e}, U Residual: {:.3e}, V Residual: {:.3e}, Step computed in {:?} ({} substeps)",
                         message.simulation_step,
                         message.simulation_time,
                         message.dt,
@@ -431,6 +431,7 @@ impl eframe::App for App {
                         message.u,
                         message.v,
                         message.step_time,
+                        message.piso_substeps,
                     );
                     self.log.push(new_message);
                 }
