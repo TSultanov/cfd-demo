@@ -74,6 +74,31 @@ impl App {
         self.simulation_handle = None;
         self.last_snapshot = None;
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_simulation(&mut self) {
+        let simulation = Model::new(self.grid.clone(), &self.simulation_params);
+        self.simulation_handle = Some(simulation.run());
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn run_simulation(&mut self) {
+        use std::sync::*;
+        let (command_sender, command_receiver) = mpsc::channel();
+        let (snapshot_sender, snapshot_receiver) = mpsc::channel();
+        let (residuals_sender, residuals_receiver) = mpsc::channel();
+
+        self.simulation_handle = Some(SimulationControlHandle {
+            residuals_receiver,
+            command_sender,
+            snapshot_receiver,
+        });
+
+        let simulation = Model::new(self.grid.clone(), &self.simulation_params);
+        wasm_thread::spawn(move || {
+            simulation.run(command_receiver, snapshot_sender, residuals_sender);
+        });
+    }
 }
 
 impl eframe::App for App {
@@ -100,8 +125,7 @@ impl eframe::App for App {
                     }
                 } else {
                     if ui.button("Start").clicked() {
-                        let simulation = Model::new(self.grid.clone(), &self.simulation_params);
-                        self.simulation_handle = Some(simulation.run());
+                        self.run_simulation();
                     }
                 }
 

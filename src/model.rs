@@ -63,9 +63,9 @@ pub enum Command {
 }
 
 pub struct SimulationControlHandle {
-    command_sender: mpsc::Sender<Command>,
-    snapshot_receiver: mpsc::Receiver<SimSnapshot>,
-    residuals_receiver: mpsc::Receiver<Residuals>,
+    pub command_sender: mpsc::Sender<Command>,
+    pub snapshot_receiver: mpsc::Receiver<SimSnapshot>,
+    pub residuals_receiver: mpsc::Receiver<Residuals>,
 }
 
 impl SimulationControlHandle {
@@ -302,7 +302,7 @@ impl Model {
     /// Implements the extrapolation, multiple substeps (the PISO algorithm)
     /// and automatic dt adjustment.
     pub fn update(&mut self) {
-        let step_start = Instant::now();
+        // let step_start = Instant::now();
         // Save current fields for residual computation.
         self.u_old.copy_from_slice(&self.u);
         self.v_old.copy_from_slice(&self.v);
@@ -318,16 +318,16 @@ impl Model {
 
         // Perform the required number of substeps (PISO substeps)
         self.last_piso_substeps_count = self.substep_count;
-        let start = Instant::now();
+        // let start = Instant::now();
         for _ in 0..self.substep_count {
-            let start_time = Instant::now();
+            // let start_time = Instant::now();
             println!("");
             self.piso_step(dt_sub);
             let p_residual = self.last_pressure_residual;
-            let piso_time = start_time.elapsed();
-            println!("piso time: {:?}, p_residual: {:.3e}", piso_time, p_residual);
+            // let piso_time = start_time.elapsed();
+            // println!("piso time: {:?}, p_residual: {:.3e}", piso_time, p_residual);
         }
-        println!("piso total time: {:?}", start.elapsed());
+        // println!("piso total time: {:?}", start.elapsed());
 
         // Compute residual differences between the updated velocity fields and their old values.
         let max_residual_u: f32 = self
@@ -377,7 +377,8 @@ impl Model {
         } else {
             new_dt
         };
-        self.last_step_time = step_start.elapsed();
+
+        // self.last_step_time = step_start.elapsed();
     }
 
     #[inline(always)]
@@ -540,7 +541,7 @@ impl Model {
 
         // ---------------- Predictor for u ----------------
         // Loop over internal u faces.
-        let start = Instant::now();
+        // let start = Instant::now();
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
                 for j in 1..(ny - 1) {
@@ -571,11 +572,11 @@ impl Model {
                 }
             }
         }
-        println!("u_star time: {:?}", start.elapsed());
+        // println!("u_star time: {:?}", start.elapsed());
 
         // ---------------- Predictor for v ----------------
         // Loop over internal v faces.
-        let start = Instant::now();
+        // let start = Instant::now();
         match self.velocity_scheme {
             VelocityScheme::FirstOrder => {
                 for j in 1..ny {
@@ -661,11 +662,11 @@ impl Model {
                 }
             }
         }
-        println!("v_face time: {:?}", start.elapsed());
+        // println!("v_face time: {:?}", start.elapsed());
 
         // ---------------- Pressure Correction (MAC form) ----------------
         // Compute the divergence (rhs) on pressure cells.
-        let start_time = Instant::now();
+        // let start_time = Instant::now();
         let dx_v: Simd<f32, LANES> = Simd::splat(dx);
         let dy_v = Simd::splat(dy);
         let dt_sub_v = Simd::splat(dt_sub);
@@ -705,9 +706,9 @@ impl Model {
                 rhs.copy_to_slice(&mut self.rhs[idx..idx + LANES]);
             }
         }
-        println!("rhs time: {:?}", start_time.elapsed());
+        // println!("rhs time: {:?}", start_time.elapsed());
 
-        let start_time = Instant::now();
+        // let start_time = Instant::now();
 
         // ---------------- Pressure Correction Solver ----------------
         match self.pressure_solver {
@@ -716,11 +717,11 @@ impl Model {
                 self.last_pressure_residual = residual;
             }
         }
-        let corrector_time = start_time.elapsed();
-        println!("corrector time: {:?}", corrector_time);
+        // let corrector_time = start_time.elapsed();
+        // println!("corrector time: {:?}", corrector_time);
 
         // ---------------- Corrector Step ----------------
-        let start = Instant::now();
+        // let start = Instant::now();
         // Correct u
         for j in 0..ny {
             for i in (1..nx).step_by(LANES) {
@@ -776,9 +777,9 @@ impl Model {
                 v_new.copy_to_slice(&mut self.v[idx..idx + LANES]);
             }
         }
-        println!("velocity corrector time: {:?}", start.elapsed());
+        // println!("velocity corrector time: {:?}", start.elapsed());
         // Accumulate the pressure correction
-        let start = Instant::now();
+        // let start = Instant::now();
         for i in (0..self.p.len()).step_by(LANES) {
             if i + LANES > self.p.len() {
                 for k in 0..(self.p.len() - i) {
@@ -792,15 +793,15 @@ impl Model {
             let p_new = p + p_prime;
             p_new.copy_to_slice(&mut self.p[i..i + LANES]);
         }
-        println!(
-            "pressure correcttion accumulation time: {:?}",
-            start.elapsed()
-        );
+        // println!(
+        //     "pressure correcttion accumulation time: {:?}",
+        //     start.elapsed()
+        // );
 
         // Enforce boundary conditions
-        let start = Instant::now();
+        // let start = Instant::now();
         self.apply_boundary_conditions();
-        println!("boundary time: {:?}", start.elapsed());
+        // println!("boundary time: {:?}", start.elapsed());
     }
 
     /// A helper for the Jacobi pressure correction solver.
@@ -1406,6 +1407,7 @@ impl Model {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn run(mut self) -> SimulationControlHandle {
         let (command_sender, command_receiver) = mpsc::channel();
         let (snapshot_sender, snapshot_receiver) = mpsc::channel();
@@ -1414,7 +1416,7 @@ impl Model {
         thread::spawn(move || {
             let mut paused = false;
             loop {
-                let start = Instant::now();
+                // let start = Instant::now();
                 let commands_in_queue = command_receiver.try_iter();
 
                 let mut snapshot_sent = false;
@@ -1444,7 +1446,7 @@ impl Model {
                 if !paused {
                     self.update();
                     residuals_sender.send(self.get_residuals()).unwrap();
-                    println!("====== Step time: {:?} ======", start.elapsed());
+                    // println!("====== Step time: {:?} ======", start.elapsed());
                 } else {
                     thread::sleep(Duration::from_millis(16));
                 }
@@ -1455,6 +1457,48 @@ impl Model {
             residuals_receiver,
             command_sender,
             snapshot_receiver,
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn run(mut self, command_receiver: mpsc::Receiver<Command>, snapshot_sender: mpsc::Sender<SimSnapshot>, residuals_sender: mpsc::Sender<Residuals>) {
+
+        let mut paused = false;
+        loop {
+            // let start = Instant::now();
+            let commands_in_queue = command_receiver.try_iter();
+
+            let mut snapshot_sent = false;
+            for command in commands_in_queue {
+                match command {
+                    Command::Stop => break,
+                    Command::SetParams(params) => {
+                        self.set_parameters(&params);
+                    }
+                    Command::GetSnapshot => {
+                        if !snapshot_sent {
+                            let mut snapshot = self.get_snapshot();
+                            snapshot.paused = paused;
+                            snapshot_sender.send(snapshot).unwrap();
+                            snapshot_sent = true;
+                        }
+                    }
+                    Command::Pause => {
+                        paused = true;
+                    }
+                    Command::Resume => {
+                        paused = false;
+                    }
+                }
+            }
+
+            if !paused {
+                self.update();
+                residuals_sender.send(self.get_residuals()).unwrap();
+                // println!("====== Step time: {:?} ======", start.elapsed());
+            } else {
+                thread::sleep(Duration::from_millis(16));
+            }
         }
     }
 }
