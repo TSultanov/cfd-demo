@@ -380,6 +380,7 @@ impl Model {
         // self.v_prev.copy_from_slice(&self.v);
     }
 
+    #[inline(always)]
     fn compute_ustar(
         &mut self,
         dt_sub: f32,
@@ -436,7 +437,7 @@ impl Model {
         u_star.copy_to_slice(&mut self.u_star[idx..idx_end]);
     }
 
-    // New function to compute v_star
+    #[inline(always)]
     fn compute_vstar(&mut self, dt_sub: f32, i: usize, j: usize,
     u_e: Simd<f32, LANES>,
     u_w: Simd<f32, LANES>,
