@@ -19,8 +19,8 @@ pub struct App {
 
 // --- New helper function to create the default grid ---
 fn default_grid() -> Grid {
-    let nx = 400;
-    let ny = 132;
+    let nx = 800;
+    let ny = 264;
     let lx = 30.0;
     let ly = 10.0;
     let dx = lx / nx as f32;

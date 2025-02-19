@@ -44,7 +44,7 @@ pub struct SimSnapshot {
 impl Default for SimulationParams {
     fn default() -> Self {
         Self {
-            dt: 0.5,
+            dt: 0.005,
             viscosity: 0.000001,
             target_inlet_velocity: 1.0,
             velocity_scheme: VelocityScheme::FirstOrder,
@@ -264,7 +264,7 @@ impl Model {
             grid,
             dt: params.dt,
             nu: params.viscosity,
-            substep_count: 5,
+            substep_count: 1,
             simulation_step: 0,
             ramp_up_steps: 100,
             current_inlet_velocity: 0.0,
@@ -350,19 +350,17 @@ impl Model {
         self.simulation_step += 1;
 
         // Adjust the number of substeps if the error norm is too high.
-        let error_norm: f32 = max_residual_u
-            .max(max_residual_v)
-            .max(self.last_pressure_residual);
-        let tolerance = 1e-3;
-        if error_norm > tolerance {
-            let factor = error_norm / tolerance;
-            self.substep_count = ((self.substep_count as f32) * factor).ceil().min(20.0) as usize;
-        } else if error_norm < tolerance / 10.0 && self.substep_count > 1 {
-            self.substep_count = (self.substep_count as f32 / 2.0).floor() as usize;
-            if self.substep_count < 1 {
-                self.substep_count = 1;
-            }
-        }
+        // let error_norm: f32 = self.last_pressure_residual;
+        // let tolerance = 1e-3;
+        // if error_norm > tolerance {
+        //     let factor = error_norm / tolerance;
+        //     self.substep_count = ((self.substep_count as f32) * factor).ceil().min(20.0) as usize;
+        // } else if error_norm < tolerance / 2.0 && self.substep_count > 1 {
+        //     self.substep_count = (self.substep_count as f32 / 2.0).floor() as usize;
+        //     if self.substep_count < 1 {
+        //         self.substep_count = 1;
+        //     }
+        // }
 
         self.simulation_time += self.dt;
 
@@ -534,10 +532,6 @@ impl Model {
         let dx = self.grid.dx;
         let dy = self.grid.dy;
 
-        // Copy velocities into predictor fields
-        self.u_star.copy_from_slice(&self.u);
-        self.v_star.copy_from_slice(&self.v);
-
         // ---------------- Predictor for u ----------------
         // Loop over internal u faces.
         let start = Instant::now();
@@ -679,45 +673,7 @@ impl Model {
         // ---------------- Pressure Correction (MAC form) ----------------
         // Compute the divergence (rhs) on pressure cells.
         let start_time = Instant::now();
-        let dx_v: Simd<f32, LANES> = Simd::splat(dx);
-        let dy_v = Simd::splat(dy);
-        let dt_sub_v = Simd::splat(dt_sub);
-        for j in 0..ny {
-            for i in (0..nx).step_by(LANES) {
-                if i + LANES > nx {
-                    for k in 0..(nx - i) {
-                        let idx = i + k + j * nx;
-                        let idx_e = (i + k + 1) + j * (nx + 1);
-                        let idx_w = i + k + j * (nx + 1);
-                        let idx_n = i + k + (j + 1) * nx;
-                        let idx_s = i + k + j * nx;
-
-                        let u_e = self.u_star[idx_e];
-                        let u_w = self.u_star[idx_w];
-                        let v_n = self.v_star[idx_n];
-                        let v_s = self.v_star[idx_s];
-                        self.rhs[idx] = ((u_e - u_w) / dx + (v_n - v_s) / dy) / dt_sub;
-                    }
-                    continue;
-                }
-
-                let idx = i + j * nx;
-                let idx_e = (i + 1) + j * (nx + 1);
-                let idx_w = i + j * (nx + 1);
-                let idx_n = i + (j + 1) * nx;
-                let idx_s = i + j * nx;
-
-                // Load the velocities.
-                let u_e = Simd::from_slice(&self.u_star[idx_e..idx_e + LANES]);
-                let u_w = Simd::from_slice(&self.u_star[idx_w..idx_w + LANES]);
-                let v_n = Simd::from_slice(&self.v_star[idx_n..idx_n + LANES]);
-                let v_s = Simd::from_slice(&self.v_star[idx_s..idx_s + LANES]);
-
-                // Compute the divergence.
-                let rhs = ((u_e - u_w) / dx_v + (v_n - v_s) / dy_v) / dt_sub_v;
-                rhs.copy_to_slice(&mut self.rhs[idx..idx + LANES]);
-            }
-        }
+        self.recompute_divergence(dt_sub, dx, dy, nx, ny);
         println!("rhs time: {:?}", start_time.elapsed());
 
         let start_time = Instant::now();
@@ -734,81 +690,38 @@ impl Model {
 
         // ---------------- Corrector Step ----------------
         let start = Instant::now();
-        // Correct u
-        for j in 0..ny {
-            for i in (1..nx).step_by(LANES) {
-                if i + LANES > nx {
-                    for k in 0..(nx - i) {
-                        let idx = i + k + j * (nx + 1);
-                        let p_right = self.p_prime[i + k + j * nx];
-                        let p_left = self.p_prime[i.saturating_sub(1) + k + j * nx];
-                        self.u[idx] = self.u_star[idx] - dt_sub * (p_right - p_left) / dx;
-                    }
-                    continue;
+        self.apply_corrector(dt_sub, dx, dy, nx, ny);
+        println!("apply corrector time: {:?}", start.elapsed());
+
+        for _iter in 0..20 {
+            let start = Instant::now();
+            self.u_star.copy_from_slice(&self.u);
+            self.v_star.copy_from_slice(&self.v);
+            println!("copy time: {:?}", start.elapsed());
+
+            // Recompute divergence from the updated velocities.
+            let start = Instant::now();
+            self.recompute_divergence(dt_sub, dx, dy, nx, ny);
+            println!("rhs time: {:?}", start.elapsed());
+            // Re-solve for an additional pressure correction.
+            let start = Instant::now();
+            match self.pressure_solver {
+                PressureSolver::Jacobi => {
+                    let residual = self.jacobi_pressure(dx, dy, nx, ny);
+                    self.last_pressure_residual = residual;
                 }
+            }
+            let corrector_time = start.elapsed();
+            println!("corrector time: {:?}", corrector_time);
+            // Second corrector update.
+            let start = Instant::now();
+            self.apply_corrector(dt_sub, dx, dy, nx, ny);
+            println!("apply corrector time: {:?}", start.elapsed());
 
-                let idx_u = i + j * (nx + 1);
-                let idx_p = i + j * nx;
-                let left_offset = i.saturating_sub(1) + j * nx;
-
-                let p_right = Simd::<f32, LANES>::from_slice(&self.p_prime[idx_p..idx_p + LANES]);
-                let p_left =
-                    Simd::<f32, LANES>::from_slice(&self.p_prime[left_offset..left_offset + LANES]);
-                let dt_sub_v = Simd::splat(dt_sub);
-                let dx_v = Simd::splat(dx);
-                let correction = dt_sub_v * ((p_right - p_left) / dx_v);
-
-                let u_star = Simd::<f32, LANES>::from_slice(&self.u_star[idx_u..idx_u + LANES]);
-                let result = u_star - correction;
-                result.copy_to_slice(&mut self.u[idx_u..idx_u + LANES]);
+            if self.last_pressure_residual < 1e-4 {
+                break;
             }
         }
-        // Correct v
-        for j in 1..ny {
-            for i in (0..nx).step_by(LANES) {
-                if i + LANES > nx {
-                    for k in 0..(nx - i) {
-                        let idx = i + k + j * nx;
-                        let p_top = self.p_prime[i + k + j * nx];
-                        let p_bottom = self.p_prime[i + k + (j - 1) * nx];
-                        self.v[idx] = self.v_star[idx] - dt_sub * (p_top - p_bottom) / dy;
-                    }
-                    continue;
-                }
-
-                let idx = i + j * nx;
-                let p_top = Simd::<f32, LANES>::from_slice(&self.p_prime[idx..idx + LANES]);
-                let bottom_idx = i + (j.saturating_sub(1)) * nx;
-                let p_bottom =
-                    Simd::<f32, LANES>::from_slice(&self.p_prime[bottom_idx..bottom_idx + LANES]);
-                let dt_sub_v = Simd::splat(dt_sub);
-                let dy_v = Simd::splat(dy);
-                let v_star = Simd::<f32, LANES>::from_slice(&self.v_star[idx..idx + LANES]);
-                let correction = dt_sub_v * ((p_top - p_bottom) / dy_v);
-                let v_new = v_star - correction;
-                v_new.copy_to_slice(&mut self.v[idx..idx + LANES]);
-            }
-        }
-        println!("velocity corrector time: {:?}", start.elapsed());
-        // Accumulate the pressure correction
-        let start = Instant::now();
-        for i in (0..self.p.len()).step_by(LANES) {
-            if i + LANES > self.p.len() {
-                for k in 0..(self.p.len() - i) {
-                    self.p[i + k] += self.p_prime[i + k];
-                }
-                continue;
-            }
-
-            let p_prime: Simd<f32, LANES> = Simd::from_slice(&self.p_prime[i..i + LANES]);
-            let p = Simd::from_slice(&self.p[i..i + LANES]);
-            let p_new = p + p_prime;
-            p_new.copy_to_slice(&mut self.p[i..i + LANES]);
-        }
-        println!(
-            "pressure correcttion accumulation time: {:?}",
-            start.elapsed()
-        );
 
         // Enforce boundary conditions
         let start = Instant::now();
@@ -819,8 +732,8 @@ impl Model {
     /// A helper for the Jacobi pressure correction solver.
     #[inline(never)]
     fn jacobi_pressure(&mut self, dx: f32, dy: f32, nx: usize, ny: usize) -> f32 {
-        let jacobi_omega = 0.9;
-        let pressure_tolerance = 1e-3;
+        let jacobi_omega = 0.75;
+        let pressure_tolerance = 1e-4;
         let iterations = 50;
         let mut max_error = 0.0;
         // Precompute constants.
@@ -969,7 +882,7 @@ impl Model {
         if max_vel == 0.0 {
             self.dt
         } else {
-            let cfl = 0.5;
+            let cfl = 0.2;
             let dt_cfl = cfl * self.grid.dx.min(self.grid.dy) / max_vel;
             dt_cfl.min(self.dt)
         }
@@ -1415,6 +1328,114 @@ impl Model {
             residuals_receiver,
             command_sender,
             snapshot_receiver,
+        }
+    }
+
+    fn apply_corrector(&mut self, dt_sub: f32, dx: f32, dy: f32, nx: usize, ny: usize) {
+        // Correct u
+        for j in 0..ny {
+            for i in (1..nx).step_by(LANES) {
+                if i + LANES > nx {
+                    for k in 0..(nx - i) {
+                        let idx = i + k + j * (nx + 1);
+                        let p_right = self.p_prime[i + k + j * nx];
+                        let p_left = self.p_prime[i.saturating_sub(1) + k + j * nx];
+                        self.u[idx] = self.u_star[idx] - dt_sub * (p_right - p_left) / dx;
+                        // This is wrong. dt_sub should be multiplied by the correction term.
+                    }
+                    continue;
+                }
+
+                let idx_u = i + j * (nx + 1);
+                let idx_p = i + j * nx;
+                let left_offset = i.saturating_sub(1) + j * nx;
+
+                let p_right = Simd::<f32, LANES>::from_slice(&self.p_prime[idx_p..idx_p + LANES]);
+                let p_left =
+                    Simd::<f32, LANES>::from_slice(&self.p_prime[left_offset..left_offset + LANES]);
+                let dt_sub_v = Simd::splat(dt_sub);
+                let dx_v = Simd::splat(dx);
+                let correction = dt_sub_v * ((p_right - p_left) / dx_v);
+
+                let u_star = Simd::<f32, LANES>::from_slice(&self.u_star[idx_u..idx_u + LANES]);
+                let result = u_star - correction;
+                result.copy_to_slice(&mut self.u[idx_u..idx_u + LANES]);
+            }
+        }
+        // Correct v
+        for j in 1..ny {
+            for i in (0..nx).step_by(LANES) {
+                if i + LANES > nx {
+                    for k in 0..(nx - i) {
+                        let idx = i + k + j * nx;
+                        let p_top = self.p_prime[i + k + j * nx];
+                        let p_bottom = self.p_prime[i + k + (j - 1) * nx];
+                        self.v[idx] = self.v_star[idx] - dt_sub * (p_top - p_bottom) / dy;
+                    }
+                    continue;
+                }
+
+                let idx = i + j * nx;
+                let p_top = Simd::<f32, LANES>::from_slice(&self.p_prime[idx..idx + LANES]);
+                let bottom_idx = i + (j.saturating_sub(1)) * nx;
+                let p_bottom =
+                    Simd::<f32, LANES>::from_slice(&self.p_prime[bottom_idx..bottom_idx + LANES]);
+                let dt_sub_v = Simd::splat(dt_sub);
+                let dy_v = Simd::splat(dy);
+                let v_star = Simd::<f32, LANES>::from_slice(&self.v_star[idx..idx + LANES]);
+                let correction = dt_sub_v * ((p_top - p_bottom) / dy_v);
+                let v_new = v_star - correction;
+                v_new.copy_to_slice(&mut self.v[idx..idx + LANES]);
+            }
+        }
+        // Accumulate the pressure correction.
+        for i in (0..self.p.len()).step_by(LANES) {
+            if i + LANES > self.p.len() {
+                for k in 0..(self.p.len() - i) {
+                    self.p[i + k] += self.p_prime[i + k];
+                }
+                continue;
+            }
+            let p_prime: Simd<f32, LANES> = Simd::from_slice(&self.p_prime[i..i + LANES]);
+            let p = Simd::from_slice(&self.p[i..i + LANES]);
+            let p_new = p + p_prime;
+            p_new.copy_to_slice(&mut self.p[i..i + LANES]);
+        }
+    }
+
+    fn recompute_divergence(&mut self, dt_sub: f32, dx: f32, dy: f32, nx: usize, ny: usize) {
+        let dx_v: Simd<f32, LANES> = Simd::splat(dx);
+        let dy_v = Simd::splat(dy);
+        let dt_sub_v = Simd::splat(dt_sub);
+        for j in 0..ny {
+            for i in (0..nx).step_by(LANES) {
+                if i + LANES > nx {
+                    for k in 0..(nx - i) {
+                        let idx = i + k + j * nx;
+                        let idx_e = (i + k + 1) + j * (nx + 1);
+                        let idx_w = i + k + j * (nx + 1);
+                        let idx_n = i + k + (j + 1) * nx;
+                        let idx_s = i + k + j * nx;
+                        let u_e = self.u_star[idx_e];
+                        let u_w = self.u_star[idx_w];
+                        let v_n = self.v_star[idx_n];
+                        let v_s = self.v_star[idx_s];
+                        self.rhs[idx] = ((u_e - u_w) / dx + (v_n - v_s) / dy) / dt_sub;
+                    }
+                    continue;
+                }
+                let idx = i + j * nx;
+                let idx_e = (i + 1) + j * (nx + 1);
+                let idx_w = i + j * (nx + 1);
+                let idx_n = i + (j + 1) * nx;
+                let idx_s = i + j * nx;
+                let u_e = Simd::from_slice(&self.u_star[idx_e..idx_e + LANES]);
+                let u_w = Simd::from_slice(&self.u_star[idx_w..idx_w + LANES]);
+                let v_n = Simd::from_slice(&self.v_star[idx_n..idx_n + LANES]);
+                let v_s = Simd::from_slice(&self.v_star[idx_s..idx_s + LANES]);
+                let rhs = ((u_e - u_w) / dx_v + (v_n - v_s) / dy_v) / dt_sub_v;
+                rhs.copy_to_slice(&mut self.rhs[idx..idx + LANES]);
+            }
         }
     }
 }
