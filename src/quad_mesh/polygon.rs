@@ -1,4 +1,4 @@
-use super::point::Point;
+use super::{aabb::AABB, point::Point};
 
 #[derive(Debug, Clone)]
 pub struct Polygon {
@@ -65,14 +65,7 @@ impl Polygon {
     pub fn contains_point(&self, p: &Point) -> bool {
         // Construct the outer polygon using vertex_buffer and vertices.
         let poly: Vec<Point> = self.vertices.iter().map(|&i| self.vertex_buffer[i].clone()).collect();
-        // Check if point lies on an edge.
-        for i in 0..poly.len() {
-            let j = (i + 1) % poly.len();
-            if Self::is_point_on_segment(p, &poly[i], &poly[j]) {
-                // Consider point on edge as inside.
-                return false_if_in_hole(self, p);
-            }
-        }
+
         // Standard ray-casting algorithm.
         let mut count = 0;
         for i in 0..poly.len() {
@@ -135,6 +128,20 @@ impl Polygon {
         let max_y = a.y.max(b.y);
         p.x >= min_x - std::f32::EPSILON && p.x <= max_x + std::f32::EPSILON &&
         p.y >= min_y - std::f32::EPSILON && p.y <= max_y + std::f32::EPSILON
+    }
+
+    pub fn bounding_box(&self) -> AABB {
+        let min_x = self.vertex_buffer.iter().map(|p| p.x).fold(std::f32::INFINITY, f32::min);
+        let max_x = self.vertex_buffer.iter().map(|p| p.x).fold(std::f32::NEG_INFINITY, f32::max);
+        let min_y = self.vertex_buffer.iter().map(|p| p.y).fold(std::f32::INFINITY, f32::min);
+        let max_y = self.vertex_buffer.iter().map(|p| p.y).fold(std::f32::NEG_INFINITY, f32::max);
+        let center = Point {
+            x: (min_x + max_x) / 2.0,
+            y: (min_y + max_y) / 2.0,
+        };
+        let half_width = (max_x - min_x) / 2.0;
+        let half_height = (max_y - min_y) / 2.0;
+        AABB::new(center, half_width, half_height)
     }
 }
 
@@ -410,21 +417,6 @@ mod tests {
         let polygon = Polygon::new(vertex_buffer, vertices).unwrap();
         let p_outside = Point { x: 5.0, y: 5.0 };
         assert!(!polygon.contains_point(&p_outside));
-    }
-
-    #[test]
-    fn test_point_in_polygon_on_edge() {
-        let vertex_buffer = vec![
-            Point { x: 0.0, y: 0.0 },
-            Point { x: 4.0, y: 0.0 },
-            Point { x: 4.0, y: 4.0 },
-            Point { x: 0.0, y: 4.0 },
-        ];
-        let vertices = vec![0, 1, 2, 3];
-        let polygon = Polygon::new(vertex_buffer, vertices).unwrap();
-        let p_on_edge = Point { x: 4.0, y: 2.0 };
-        // Point on the edge is considered inside.
-        assert!(polygon.contains_point(&p_on_edge));
     }
 
     #[test]
