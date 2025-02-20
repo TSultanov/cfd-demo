@@ -1,11 +1,20 @@
-use crate::model::{
+use crate::{model::{
     Cylinder, Grid, InletProfile, Model, PressureSolver, SimSnapshot, SimulationControlHandle,
     SimulationParams, VelocityScheme,
-};
+}, views::mesh_view::MeshView};
 use eframe::egui;
+
+#[derive(PartialEq)]
+enum ViewMode {
+    Simulation,
+    Mesh,
+}
 
 /// Updated App struct with simulation running in a background thread.
 pub struct App {
+    view_mode: ViewMode,
+    mesh_view: MeshView,
+
     // --- New fields for logging ---
     log: Vec<String>, // stores all log messages
     // --- New field for visualization mode ---
@@ -43,6 +52,9 @@ fn default_grid() -> Grid {
 impl Default for App {
     fn default() -> Self {
         Self {
+            view_mode: ViewMode::Mesh,
+            mesh_view: MeshView::default(),
+
             // --- New initializations ---
             log: Vec::new(), // stores all log messages
             // --- New field for visualization mode ---
@@ -74,10 +86,8 @@ impl App {
         self.simulation_handle = None;
         self.last_snapshot = None;
     }
-}
 
-impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update_simulation_view(&mut self, ctx: &egui::Context) {
         // Request the simulation state update from the simulation thread.
         if let Some(handle) = &self.simulation_handle {
             let last_available_snapshot = handle.get_last_available_snapshot();
@@ -458,6 +468,32 @@ impl eframe::App for App {
                 ctx.request_repaint();
             }
             None => {}
+        }
+    }
+}
+
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(self.view_mode == ViewMode::Simulation, "Simulation")
+                    .clicked()
+                {
+                    self.view_mode = ViewMode::Simulation;
+                }
+                if ui
+                    .selectable_label(self.view_mode == ViewMode::Mesh, "Mesh")
+                    .clicked()
+                {
+                    self.view_mode = ViewMode::Mesh;
+                }
+            });
+        });
+
+        match self.view_mode {
+            ViewMode::Simulation => self.update_simulation_view(ctx),
+            ViewMode::Mesh => self.mesh_view.update(ctx, frame),
         }
     }
 }
