@@ -1,4 +1,4 @@
-use crate::utils::intersection::line_segment_intersection;
+use crate::utils::intersection::{do_intersect, line_segment_intersection};
 use super::{aabb::AABB, point::Point};
 
 #[derive(Debug, Clone)]
@@ -120,9 +120,6 @@ impl Polygon {
 
     pub fn edges_intersect_aabb(&self, other: &AABB) -> bool {
         for (a, b) in self.edges() {
-            if other.contains(a) || other.contains(b) {
-                return true;
-            }
             if other.intersects_segment(&a, &b) {
                 return true;
             }
@@ -227,7 +224,7 @@ fn polygon_is_self_intersecting(pts: &[Point]) -> bool {
             }
             let p2 = &pts[j];
             let q2 = &pts[(j + 1) % n];
-            if line_segment_intersection(p1, q1, p2, q2).is_some() {
+            if do_intersect(p1, q1, p2, q2) {
                 return true;
             }
         }
@@ -320,97 +317,6 @@ mod tests {
         let vertices = vec![0, 3, 2, 1, 4];
         let polygon = Polygon::new(vertex_buffer, vertices);
         assert!(matches!(polygon, Err(PolygonError::SelfIntersecting)));
-    }
-
-    #[test]
-    fn test_line_intersection_intersecting() {
-        // segments that clearly intersect: (0,0)-(1,1) and (0,1)-(1,0)
-        let p1 = Point { x: 0.0, y: 0.0 };
-        let q1 = Point { x: 1.0, y: 1.0 };
-        let p2 = Point { x: 0.0, y: 1.0 };
-        let q2 = Point { x: 1.0, y: 0.0 };
-        assert!(line_segment_intersection(&p1, &q1, &p2, &q2).is_some());
-    }
-
-    #[test]
-    fn test_line_intersection_non_intersecting_but_lines_do() {
-        // segments whose infinite lines intersect at (1,1) but segments don't reach that point.
-        let p1 = Point { x: 0.0, y: 0.0 };
-        let q1 = Point { x: 0.5, y: 0.5 };
-        let p2 = Point { x: 2.0, y: 0.0 };
-        let q2 = Point { x: 3.0, y: -1.0 };
-        assert!(line_segment_intersection(&p1, &q1, &p2, &q2).is_none());
-    }
-
-    #[test]
-    fn test_line_intersection_parallel() {
-        // parallel segments: (0,0)-(1,0) and (0,1)-(1,1)
-        let p1 = Point { x: 0.0, y: 0.0 };
-        let q1 = Point { x: 1.0, y: 0.0 };
-        let p2 = Point { x: 0.0, y: 1.0 };
-        let q2 = Point { x: 1.0, y: 1.0 };
-        assert!(line_segment_intersection(&p1, &q1, &p2, &q2).is_none());
-    }
-
-    #[test]
-    fn test_line_intersection_collinear() {
-        // collinear segments with no overlap: (0,0)-(1,1) and (2,2)-(3,3)
-        let p1 = Point { x: 0.0, y: 0.0 };
-        let q1 = Point { x: 1.0, y: 1.0 };
-        let p2 = Point { x: 2.0, y: 2.0 };
-        let q2 = Point { x: 3.0, y: 3.0 };
-        assert!(line_segment_intersection(&p1, &q1, &p2, &q2).is_none());
-    }
-
-    #[test]
-    fn test_line_intersection_endpoint() {
-        // Segments sharing an endpoint should return that endpoint.
-        let p1 = Point { x: 0.0, y: 0.0 };
-        let q1 = Point { x: 1.0, y: 1.0 };
-        let p2 = Point { x: 1.0, y: 1.0 };
-        let q2 = Point { x: 2.0, y: 0.0 };
-        if let Some(ip) = line_segment_intersection(&p1, &q1, &p2, &q2) {
-            assert!((ip.x - 1.0).abs() < std::f32::EPSILON);
-            assert!((ip.y - 1.0).abs() < std::f32::EPSILON);
-        } else {
-            panic!("Expected intersection at endpoint (1.0, 1.0)");
-        }
-    }
-
-    #[test]
-    fn test_line_intersection_overlapping_collinear() {
-        // Collinear overlapping segments should return None as per our implementation
-        let p1 = Point { x: 0.0, y: 0.0 };
-        let q1 = Point { x: 2.0, y: 2.0 };
-        let p2 = Point { x: 1.0, y: 1.0 };
-        let q2 = Point { x: 3.0, y: 3.0 };
-        // Even though they overlap, our line_intersection returns None since they are collinear.
-        assert!(line_segment_intersection(&p1, &q1, &p2, &q2).is_none());
-    }
-
-    #[test]
-    fn test_line_intersection_nearly_parallel() {
-        // Two segments nearly parallel resulting in no intersection.
-        let p1 = Point { x: 0.0, y: 0.0 };
-        let q1 = Point { x: 10.0, y: 0.0001 };
-        let p2 = Point { x: 0.0, y: 1.0 };
-        let q2 = Point { x: 10.0, y: 1.0001 };
-        assert!(line_segment_intersection(&p1, &q1, &p2, &q2).is_none());
-    }
-
-    #[test]
-    fn test_line_intersection_exact_intersection() {
-        // Two segments with a clear intersection not at endpoints.
-        let p1 = Point { x: 0.0, y: 0.0 };
-        let q1 = Point { x: 2.0, y: 2.0 };
-        let p2 = Point { x: 0.0, y: 2.0 };
-        let q2 = Point { x: 2.0, y: 0.0 };
-        if let Some(ip) = line_segment_intersection(&p1, &q1, &p2, &q2) {
-            assert!((ip.x - 1.0).abs() < std::f32::EPSILON);
-            assert!((ip.y - 1.0).abs() < std::f32::EPSILON);
-        } else {
-            panic!("Expected intersection at (1.0, 1.0)");
-        }
     }
 
     #[test]

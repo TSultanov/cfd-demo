@@ -1,4 +1,4 @@
-use crate::utils::intersection::line_segment_intersection;
+use crate::utils::intersection::{do_intersect, line_segment_intersection};
 use super::{point::Point, polygon::Polygon};
 
 #[derive(Debug, Clone, Copy)]
@@ -82,9 +82,9 @@ impl AABB {
         let bl = &self.bottom_left();
         let br = &self.bottom_right();
 
-        line_segment_intersection(a, b, tl, tr).is_some()
-            || line_segment_intersection(a, b, tr, br).is_some()
-            || line_segment_intersection(a, b, br, bl).is_some()
-            || line_segment_intersection(a, b, bl, tl).is_some()
+        do_intersect(a, b, tl, tr)
+            || do_intersect(a, b, tr, br)
+            || do_intersect(a, b, br, bl)
+            || do_intersect(a, b, bl, tl)
     }
 }
