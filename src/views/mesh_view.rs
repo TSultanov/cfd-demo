@@ -8,12 +8,14 @@ use crate::utils::mesh_rasterizer::{rasterize_mesh, rasterize_mesh_no_background
 
 pub struct MeshParams {
     pub feature_size: f32,
+    pub max_cell_size: f32,
 }
 
 impl Default for MeshParams {
     fn default() -> Self {
         Self {
-            feature_size: 0.2,
+            feature_size: 0.1,
+            max_cell_size: 0.5,
         }
     }
 }
@@ -48,9 +50,11 @@ impl eframe::App for MeshView {
         egui::SidePanel::left("mesh_params").show(ctx, |ui| {
             ui.heading("Mesh Parameters");
             ui.label("Feature Size");
-            ui.add(egui::Slider::new(&mut self.mesh_params.feature_size, 0.1..=1.0));
+            ui.add(egui::Slider::new(&mut self.mesh_params.feature_size, 0.01..=0.5));
+            ui.label("Max Cell Size");
+            ui.add(egui::Slider::new(&mut self.mesh_params.max_cell_size, 0.1..=1.0));
             if ui.button("Tesselate").clicked() {
-                self.mesh = Some(tesselate(&self.sketch, self.mesh_params.feature_size));
+                self.mesh = Some(tesselate(&self.sketch, self.mesh_params.feature_size, self.mesh_params.max_cell_size));
             }
         });
 
