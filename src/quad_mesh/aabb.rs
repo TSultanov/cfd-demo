@@ -25,6 +25,14 @@ impl AABB {
         )
     }
 
+    pub fn width(&self) -> f32 {
+        2.0 * self.half_width
+    }
+
+    pub fn height(&self) -> f32 {
+        2.0 * self.half_height
+    }
+
     pub fn top_left(&self) -> Point {
         Point {
             x: self.center.x - self.half_width,

@@ -63,15 +63,12 @@ impl Polygon {
     }
 
     pub fn contains_point(&self, p: &Point) -> bool {
-        // Construct the outer polygon using vertex_buffer and vertices.
-        let poly: Vec<Point> = self.vertices.iter().map(|&i| self.vertex_buffer[i].clone()).collect();
-
         // Standard ray-casting algorithm.
         let mut count = 0;
-        for i in 0..poly.len() {
-            let j = (i + 1) % poly.len();
-            let a = &poly[i];
-            let b = &poly[j];
+        for i in 0..self.vertices.len() {
+            let j = (i + 1) % self.vertices.len();
+            let a = &self.vertex_buffer[self.vertices[i]];
+            let b = &self.vertex_buffer[self.vertices[j]];
             if (a.y > p.y) != (b.y > p.y) {
                 let x_intersect = a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y);
                 if p.x < x_intersect {
@@ -94,8 +91,16 @@ impl Polygon {
 
     pub fn intersects(&self, other: &Polygon) -> bool {
         // Obtain the polygon points for self and other.
-        let poly1: Vec<&Point> = self.vertices.iter().map(|&i| &self.vertex_buffer[i]).collect();
-        let poly2: Vec<&Point> = other.vertices.iter().map(|&i| &other.vertex_buffer[i]).collect();
+        let poly1: Vec<&Point> = self
+            .vertices
+            .iter()
+            .map(|&i| &self.vertex_buffer[i])
+            .collect();
+        let poly2: Vec<&Point> = other
+            .vertices
+            .iter()
+            .map(|&i| &other.vertex_buffer[i])
+            .collect();
 
         // Check if any edges of the polygons intersect.
         for i in 0..poly1.len() {
@@ -126,15 +131,33 @@ impl Polygon {
         let max_x = a.x.max(b.x);
         let min_y = a.y.min(b.y);
         let max_y = a.y.max(b.y);
-        p.x >= min_x - std::f32::EPSILON && p.x <= max_x + std::f32::EPSILON &&
-        p.y >= min_y - std::f32::EPSILON && p.y <= max_y + std::f32::EPSILON
+        p.x >= min_x - std::f32::EPSILON
+            && p.x <= max_x + std::f32::EPSILON
+            && p.y >= min_y - std::f32::EPSILON
+            && p.y <= max_y + std::f32::EPSILON
     }
 
     pub fn bounding_box(&self) -> AABB {
-        let min_x = self.vertex_buffer.iter().map(|p| p.x).fold(std::f32::INFINITY, f32::min);
-        let max_x = self.vertex_buffer.iter().map(|p| p.x).fold(std::f32::NEG_INFINITY, f32::max);
-        let min_y = self.vertex_buffer.iter().map(|p| p.y).fold(std::f32::INFINITY, f32::min);
-        let max_y = self.vertex_buffer.iter().map(|p| p.y).fold(std::f32::NEG_INFINITY, f32::max);
+        let min_x = self
+            .vertex_buffer
+            .iter()
+            .map(|p| p.x)
+            .fold(std::f32::INFINITY, f32::min);
+        let max_x = self
+            .vertex_buffer
+            .iter()
+            .map(|p| p.x)
+            .fold(std::f32::NEG_INFINITY, f32::max);
+        let min_y = self
+            .vertex_buffer
+            .iter()
+            .map(|p| p.y)
+            .fold(std::f32::INFINITY, f32::min);
+        let max_y = self
+            .vertex_buffer
+            .iter()
+            .map(|p| p.y)
+            .fold(std::f32::NEG_INFINITY, f32::max);
         let center = Point {
             x: (min_x + max_x) / 2.0,
             y: (min_y + max_y) / 2.0,
@@ -142,6 +165,17 @@ impl Polygon {
         let half_width = (max_x - min_x) / 2.0;
         let half_height = (max_y - min_y) / 2.0;
         AABB::new(center, half_width, half_height)
+    }
+
+    pub fn edges(&self) -> Vec<(Point, Point)> {
+        self.vertices
+            .iter()
+            .map(|&i| {
+                let a = self.vertex_buffer[i];
+                let b = self.vertex_buffer[(i + 1) % self.vertices.len()];
+                (a, b)
+            })
+            .collect()
     }
 }
 
@@ -444,15 +478,24 @@ mod tests {
 
         // Point inside the hole: should be rejected.
         let p_inside_hole = Point { x: 5.0, y: 5.0 };
-        assert!(!outer.contains_point(&p_inside_hole), "Point inside the hole must be considered outside overall");
+        assert!(
+            !outer.contains_point(&p_inside_hole),
+            "Point inside the hole must be considered outside overall"
+        );
 
         // Point in outer polygon but outside the hole: should be accepted.
         let p_in_outer = Point { x: 2.0, y: 2.0 };
-        assert!(outer.contains_point(&p_in_outer), "Point in outer polygon and outside the hole must be considered inside overall");
+        assert!(
+            outer.contains_point(&p_in_outer),
+            "Point in outer polygon and outside the hole must be considered inside overall"
+        );
 
         // Point on the boundary of the hole: treated as inside the hole, thus overall false.
         let p_on_hole_edge = Point { x: 3.0, y: 5.0 };
-        assert!(!outer.contains_point(&p_on_hole_edge), "Point on the hole's edge must be considered outside overall");
+        assert!(
+            !outer.contains_point(&p_on_hole_edge),
+            "Point on the hole's edge must be considered outside overall"
+        );
     }
 
     #[test]
@@ -557,6 +600,18 @@ mod tests {
     }
 
     #[test]
+    fn test_add_valid_hole2() {
+        // Outer polygon: square from (0,0) to (10,10)
+        let mut outer = Polygon::new_rect(0.0, 0.0, 10.0, 10.0);
+
+        // Hole: square from (3,3) to (7,7)
+        let hole = Polygon::new_rect(3.0, 3.0, 4.0, 4.0);
+
+        // Valid hole should be added successfully.
+        assert!(outer.add_hole(hole).is_ok());
+    }
+
+    #[test]
     fn test_add_invalid_hole() {
         // Outer polygon: square from (0,0) to (10,10)
         let outer_vb = vec![
@@ -579,6 +634,9 @@ mod tests {
         let hole = Polygon::new(hole_vb, hole_vertices).unwrap();
 
         // Adding invalid hole should return an error.
-        assert!(matches!(outer.add_hole(hole), Err(PolygonError::InvalidHole)));
+        assert!(matches!(
+            outer.add_hole(hole),
+            Err(PolygonError::InvalidHole)
+        ));
     }
 }

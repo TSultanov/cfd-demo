@@ -1,7 +1,10 @@
-use crate::{model::{
-    Cylinder, Grid, InletProfile, Model, PressureSolver, SimSnapshot, SimulationControlHandle,
-    SimulationParams, VelocityScheme,
-}, views::mesh_view::MeshView};
+use crate::{
+    model::{
+        Cylinder, Grid, InletProfile, Model, PressureSolver, SimSnapshot, SimulationControlHandle,
+        SimulationParams, VelocityScheme,
+    },
+    views::mesh_view::MeshView,
+};
 use eframe::egui;
 
 #[derive(PartialEq)]

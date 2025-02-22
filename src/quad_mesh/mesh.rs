@@ -28,7 +28,10 @@ fn tesselate_impl(polygon: &Polygon, boundary: &AABB, depth: usize, feature_size
 
     // Stop subdividing if cell is homogeneous, too small, or no remaining depth.
     if depth == 0 || cell_width <= feature_size || all_inside || all_outside {
-        return Cell { boundary: *boundary, children: None };
+        return Cell {
+            boundary: *boundary,
+            children: None,
+        };
     }
 
     let new_half_width = boundary.half_width / 2.0;
@@ -40,31 +43,62 @@ fn tesselate_impl(polygon: &Polygon, boundary: &AABB, depth: usize, feature_size
     let cells = [
         tesselate_impl(
             polygon,
-            &AABB::new(Point { x: cx - new_half_width, y: cy - new_half_height }, new_half_width, new_half_height),
+            &AABB::new(
+                Point {
+                    x: cx - new_half_width,
+                    y: cy - new_half_height,
+                },
+                new_half_width,
+                new_half_height,
+            ),
             depth - 1,
             feature_size,
         ),
         tesselate_impl(
             polygon,
-            &AABB::new(Point { x: cx + new_half_width, y: cy - new_half_height }, new_half_width, new_half_height),
+            &AABB::new(
+                Point {
+                    x: cx + new_half_width,
+                    y: cy - new_half_height,
+                },
+                new_half_width,
+                new_half_height,
+            ),
             depth - 1,
             feature_size,
         ),
         tesselate_impl(
             polygon,
-            &AABB::new(Point { x: cx - new_half_width, y: cy + new_half_height }, new_half_width, new_half_height),
+            &AABB::new(
+                Point {
+                    x: cx - new_half_width,
+                    y: cy + new_half_height,
+                },
+                new_half_width,
+                new_half_height,
+            ),
             depth - 1,
             feature_size,
         ),
         tesselate_impl(
             polygon,
-            &AABB::new(Point { x: cx + new_half_width, y: cy + new_half_height }, new_half_width, new_half_height),
+            &AABB::new(
+                Point {
+                    x: cx + new_half_width,
+                    y: cy + new_half_height,
+                },
+                new_half_width,
+                new_half_height,
+            ),
             depth - 1,
             feature_size,
         ),
     ];
 
-    Cell { boundary: *boundary, children: Some(Box::new(cells)) }
+    Cell {
+        boundary: *boundary,
+        children: Some(Box::new(cells)),
+    }
 }
 
 #[cfg(test)]
@@ -88,7 +122,9 @@ mod tests {
         let polygon = Polygon::new_rect(0.0, 0.0, 10.0, 10.0);
         let cell = tesselate(&polygon, 1, 0.5);
         // Should be homogeneous, so no subdivision.
-        assert!(cell.children.is_some_and(|c| c.iter().all(|c| c.children.is_none())));
+        assert!(cell
+            .children
+            .is_some_and(|c| c.iter().all(|c| c.children.is_none())));
     }
 
     #[test]
@@ -100,7 +136,10 @@ mod tests {
         let n = 8;
         for i in 0..n {
             let theta = (i as f32) * std::f32::consts::TAU / (n as f32);
-            let pt = Point { x: center.x + 4.0 * theta.cos(), y: center.y + 4.0 * theta.sin() };
+            let pt = Point {
+                x: center.x + 4.0 * theta.cos(),
+                y: center.y + 4.0 * theta.sin(),
+            };
             vertex_buffer.push(pt);
             vertices.push(i);
         }
@@ -110,4 +149,3 @@ mod tests {
         assert!(cell.children.is_some());
     }
 }
-
