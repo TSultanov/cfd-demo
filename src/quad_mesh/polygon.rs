@@ -50,6 +50,20 @@ impl Polygon {
         Self::new(vertex_buffer, vertices).unwrap()
     }
 
+    pub fn new_polygon(center: Point, radius: f32, n: usize, start_angle: f32) -> Self {
+        let mut vertex_buffer = Vec::new();
+        let mut vertices = Vec::new();
+        for i in 0..n {
+            let theta = (i as f32) * std::f32::consts::TAU / (n as f32) + start_angle;
+            let x = center.x + radius * theta.cos();
+            let y = center.y + radius * theta.sin();
+            vertex_buffer.push(Point { x, y });
+            vertices.push(i);
+        }
+        // Unwrap since polygon always provides n vertices and is non-self-intersecting
+        Self::new(vertex_buffer, vertices).unwrap()
+    }
+
     pub fn add_hole(&mut self, hole: Polygon) -> Result<(), PolygonError> {
         // Validate that every vertex of the hole is inside the parent polygon.
         for &idx in &hole.vertices {

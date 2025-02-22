@@ -7,6 +7,12 @@ pub struct Cell {
     pub children: Option<Box<[Cell; 4]>>,
 }
 
+impl Cell {
+    pub fn is_leaf(&self) -> bool {
+        self.children.is_none()
+    }
+}
+
 pub fn tesselate(polygon: &Polygon, depth: usize, feature_size: f32) -> Cell {
     tesselate_impl(polygon, &polygon.bounding_box(), depth, feature_size)
 }

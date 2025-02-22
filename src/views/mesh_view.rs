@@ -1,27 +1,60 @@
+use crate::quad_mesh::mesh::{tesselate, Cell};
+use crate::quad_mesh::point::Point;
 use crate::quad_mesh::polygon::Polygon;
-use crate::utils::polygon_rasterizer::Rasterizer;
+use crate::utils::polygon_rasterizer::PolygonRasterizer;
 use std::rc::Rc;
+use crate::utils::mesh_rasterizer::rasterize_mesh;
+
+pub struct MeshParams {
+    pub depth: usize,
+    pub feature_size: f32,
+}
+
+impl Default for MeshParams {
+    fn default() -> Self {
+        Self {
+            depth: 7,
+            feature_size: 0.5,
+        }
+    }
+}
 
 pub struct MeshView {
     sketch: Rc<Polygon>,
-    sketch_rasterizer: Rasterizer,
+    sketch_rasterizer: PolygonRasterizer,
     sketch_texture: Option<egui::TextureHandle>,
+
+    mesh: Option<Cell>,
+    mesh_params: MeshParams,
 }
 
 impl Default for MeshView {
     fn default() -> Self {
         let polygon = Rc::new(default_polygon());
-        let rasterizer = Rasterizer::new(polygon.clone());
+        let rasterizer = PolygonRasterizer::new(polygon.clone());
         Self {
             sketch: polygon,
             sketch_texture: None,
             sketch_rasterizer: rasterizer,
+            mesh: None,
+            mesh_params: MeshParams::default(),
         }
     }
 }
 
 impl eframe::App for MeshView {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::SidePanel::left("mesh_params").show(ctx, |ui| {
+            ui.heading("Mesh Parameters");
+            ui.label("Depth");
+            ui.add(egui::DragValue::new(&mut self.mesh_params.depth).range(0..=10));
+            ui.label("Feature Size");
+            ui.add(egui::Slider::new(&mut self.mesh_params.feature_size, 0.1..=1.0));
+            if ui.button("Tesselate").clicked() {
+                self.mesh = Some(tesselate(&self.sketch, self.mesh_params.depth, self.mesh_params.feature_size));
+            }
+        });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             self.draw_sketch(ui, ctx);
         });
@@ -45,6 +78,12 @@ impl MeshView {
             .sketch_rasterizer
             .rasterize(img_width as usize, img_height as usize);
 
+        let image = if let Some(mesh) = &self.mesh {
+            rasterize_mesh(mesh, image, self.sketch.bounding_box())
+        } else {
+            image
+        };
+
         let options = egui::TextureOptions {
             magnification: egui::TextureFilter::Nearest,
             minification: egui::TextureFilter::Nearest,
@@ -67,8 +106,13 @@ impl MeshView {
 fn default_polygon() -> Polygon {
     let mut poly = Polygon::new_rect(0.0, 0.0, 30.0, 10.0);
 
-    poly.add_hole(Polygon::new_rect(7.0, 4.0, 2.0, 2.0))
-        .unwrap();
+    poly.add_hole(Polygon::new_polygon(
+        Point { x: 5.0, y: 5.0 },
+        1.0,
+        8,
+        std::f32::consts::TAU / 16.0,
+    ))
+    .unwrap();
 
     poly
 }
