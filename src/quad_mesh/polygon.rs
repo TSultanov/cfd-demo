@@ -1,3 +1,4 @@
+use crate::utils::intersection::line_segment_intersection;
 use super::{aabb::AABB, point::Point};
 
 #[derive(Debug, Clone)]
@@ -103,36 +104,36 @@ impl Polygon {
         true
     }
 
-    pub fn intersects(&self, other: &Polygon) -> bool {
-        // Obtain the polygon points for self and other.
-        let poly1: Vec<&Point> = self
-            .vertices
-            .iter()
-            .map(|&i| &self.vertex_buffer[i])
-            .collect();
-        let poly2: Vec<&Point> = other
-            .vertices
-            .iter()
-            .map(|&i| &other.vertex_buffer[i])
-            .collect();
+    pub fn intersects_aabb(&self, other: &AABB) -> bool {
+        // Check if any point of the AABB is inside the polygon
+        if self.contains_point(&other.top_left())
+            || self.contains_point(&other.top_right())
+            || self.contains_point(&other.bottom_left())
+            || self.contains_point(&other.bottom_right())
+            || self.contains_point(&other.center)
+        {
+            return true;
+        }
 
-        // Check if any edges of the polygons intersect.
-        for i in 0..poly1.len() {
-            let a = poly1[i];
-            let b = poly1[(i + 1) % poly1.len()];
-            for j in 0..poly2.len() {
-                let c = poly2[j];
-                let d = poly2[(j + 1) % poly2.len()];
-                if line_segment_intersection(a, b, c, d).is_some() {
-                    return true;
-                }
+        false
+    }
+
+    pub fn edges_intersect_aabb(&self, other: &AABB) -> bool {
+        for (a, b) in self.edges() {
+            if other.contains(a) || other.contains(b) {
+                return true;
+            }
+            if other.intersects_segment(&a, &b) {
+                return true;
             }
         }
 
-        // Check if one polygon contains a vertex of the other.
-        if self.contains_point(poly2[0]) || other.contains_point(poly1[0]) {
-            return true;
+        for hole in &self.holes {
+            if hole.edges_intersect_aabb(other) {
+                return true;
+            }
         }
+
         false
     }
 
@@ -181,6 +182,12 @@ impl Polygon {
         AABB::new(center, half_width, half_height)
     }
 
+    pub fn bounding_square(&self) -> AABB {
+        let bbox = self.bounding_box();
+        let max_dim = bbox.width().max(bbox.height());
+        AABB::new(bbox.center, max_dim / 2.0, max_dim / 2.0)
+    }
+
     pub fn edges(&self) -> Vec<(Point, Point)> {
         self.vertices
             .iter()
@@ -226,39 +233,6 @@ fn polygon_is_self_intersecting(pts: &[Point]) -> bool {
         }
     }
     false
-}
-
-// Helper: compute intersection point of segment p-q with segment a-b
-fn line_segment_intersection(p: &Point, q: &Point, a: &Point, b: &Point) -> Option<Point> {
-    let a1 = q.y - p.y;
-    let b1 = p.x - q.x;
-    let c1 = a1 * p.x + b1 * p.y;
-
-    let a2 = b.y - a.y;
-    let b2 = a.x - b.x;
-    let c2 = a2 * a.x + b2 * a.y;
-
-    let det = a1 * b2 - a2 * b1;
-    if det.abs() < std::f32::EPSILON {
-        return None; // lines are parallel
-    }
-    let x = (b2 * c1 - b1 * c2) / det;
-    let y = (a1 * c2 - a2 * c1) / det;
-
-    // Check if intersection lies on both segments.
-    if x < p.x.min(q.x) - std::f32::EPSILON || x > p.x.max(q.x) + std::f32::EPSILON {
-        return None;
-    }
-    if x < a.x.min(b.x) - std::f32::EPSILON || x > a.x.max(b.x) + std::f32::EPSILON {
-        return None;
-    }
-    if y < p.y.min(q.y) - std::f32::EPSILON || y > p.y.max(q.y) + std::f32::EPSILON {
-        return None;
-    }
-    if y < a.y.min(b.y) - std::f32::EPSILON || y > a.y.max(b.y) + std::f32::EPSILON {
-        return None;
-    }
-    Some(Point { x, y })
 }
 
 #[cfg(test)]
@@ -510,81 +484,6 @@ mod tests {
             !outer.contains_point(&p_on_hole_edge),
             "Point on the hole's edge must be considered outside overall"
         );
-    }
-
-    #[test]
-    fn test_intersecting_polygons() {
-        // Two squares partially overlapping.
-        let vb1 = vec![
-            Point { x: 0.0, y: 0.0 },
-            Point { x: 3.0, y: 0.0 },
-            Point { x: 3.0, y: 3.0 },
-            Point { x: 0.0, y: 3.0 },
-        ];
-        let vertices1 = vec![0, 1, 2, 3];
-        let poly1 = Polygon::new(vb1, vertices1).unwrap();
-
-        let vb2 = vec![
-            Point { x: 2.0, y: 2.0 },
-            Point { x: 5.0, y: 2.0 },
-            Point { x: 5.0, y: 5.0 },
-            Point { x: 2.0, y: 5.0 },
-        ];
-        let vertices2 = vec![0, 1, 2, 3];
-        let poly2 = Polygon::new(vb2, vertices2).unwrap();
-
-        assert!(poly1.intersects(&poly2));
-        assert!(poly2.intersects(&poly1));
-    }
-
-    #[test]
-    fn test_non_intersecting_polygons() {
-        // Two squares far apart.
-        let vb1 = vec![
-            Point { x: 0.0, y: 0.0 },
-            Point { x: 2.0, y: 0.0 },
-            Point { x: 2.0, y: 2.0 },
-            Point { x: 0.0, y: 2.0 },
-        ];
-        let vertices1 = vec![0, 1, 2, 3];
-        let poly1 = Polygon::new(vb1, vertices1).unwrap();
-
-        let vb2 = vec![
-            Point { x: 3.0, y: 3.0 },
-            Point { x: 5.0, y: 3.0 },
-            Point { x: 5.0, y: 5.0 },
-            Point { x: 3.0, y: 5.0 },
-        ];
-        let vertices2 = vec![0, 1, 2, 3];
-        let poly2 = Polygon::new(vb2, vertices2).unwrap();
-
-        assert!(!poly1.intersects(&poly2));
-        assert!(!poly2.intersects(&poly1));
-    }
-
-    #[test]
-    fn test_containment_intersects() {
-        // One polygon completely inside another.
-        let vb1 = vec![
-            Point { x: 0.0, y: 0.0 },
-            Point { x: 6.0, y: 0.0 },
-            Point { x: 6.0, y: 6.0 },
-            Point { x: 0.0, y: 6.0 },
-        ];
-        let vertices1 = vec![0, 1, 2, 3];
-        let poly1 = Polygon::new(vb1, vertices1).unwrap();
-
-        let vb2 = vec![
-            Point { x: 2.0, y: 2.0 },
-            Point { x: 4.0, y: 2.0 },
-            Point { x: 4.0, y: 4.0 },
-            Point { x: 2.0, y: 4.0 },
-        ];
-        let vertices2 = vec![0, 1, 2, 3];
-        let poly2 = Polygon::new(vb2, vertices2).unwrap();
-
-        assert!(poly1.intersects(&poly2));
-        assert!(poly2.intersects(&poly1));
     }
 
     #[test]

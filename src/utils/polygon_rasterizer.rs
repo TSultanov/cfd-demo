@@ -1,6 +1,7 @@
 use crate::quad_mesh::point::Point;
 use crate::quad_mesh::polygon::Polygon;
 use std::rc::Rc;
+use crate::quad_mesh::aabb::AABB;
 use crate::utils::drawing::draw_line;
 
 pub struct PolygonRasterizer {

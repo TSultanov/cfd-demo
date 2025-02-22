@@ -1,3 +1,4 @@
+use crate::utils::intersection::line_segment_intersection;
 use super::{point::Point, polygon::Polygon};
 
 #[derive(Debug, Clone, Copy)]
@@ -73,5 +74,17 @@ impl AABB {
             && self.top_left().x <= other.top_right().x
             && self.top_left().y <= other.bottom_left().y
             && self.bottom_left().y >= other.top_left().y
+    }
+
+    pub fn intersects_segment(&self, a: &Point, b: &Point) -> bool {
+        let tl = &self.top_left();
+        let tr = &self.top_right();
+        let bl = &self.bottom_left();
+        let br = &self.bottom_right();
+
+        line_segment_intersection(a, b, tl, tr).is_some()
+            || line_segment_intersection(a, b, tr, br).is_some()
+            || line_segment_intersection(a, b, br, bl).is_some()
+            || line_segment_intersection(a, b, bl, tl).is_some()
     }
 }

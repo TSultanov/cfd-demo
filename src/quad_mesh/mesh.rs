@@ -2,6 +2,7 @@
 
 use super::{aabb::AABB, point::Point, polygon::Polygon};
 
+#[derive(Clone)]
 pub struct Cell {
     pub boundary: AABB,
     pub children: Option<Box<[Cell; 4]>>,
@@ -13,27 +14,19 @@ impl Cell {
     }
 }
 
-pub fn tesselate(polygon: &Polygon, depth: usize, feature_size: f32) -> Cell {
-    tesselate_impl(polygon, &polygon.bounding_box(), depth, feature_size)
+pub fn tesselate(polygon: &Polygon, feature_size: f32) -> Cell {
+    tesselate_impl(polygon, &polygon.bounding_square(), feature_size)
 }
 
 // New function: adaptive quadtree meshing based on polygon edges.
-fn tesselate_impl(polygon: &Polygon, boundary: &AABB, depth: usize, feature_size: f32) -> Cell {
-    let cell_width = boundary.half_width * 2.0;
-    // Get cell corner points.
-    let tl = boundary.top_left();
-    let tr = boundary.top_right();
-    let bl = boundary.bottom_left();
-    let br = boundary.bottom_right();
-    let all_inside = polygon.contains_point(&tl)
-        && polygon.contains_point(&tr)
-        && polygon.contains_point(&bl)
-        && polygon.contains_point(&br);
+fn tesselate_impl(polygon: &Polygon, boundary: &AABB, feature_size: f32) -> Cell {
+    let cell_size = boundary.width().min(boundary.height());
 
-    let all_outside = !polygon.intersects(&boundary.to_polygon());
+    let all_outside = !polygon.intersects_aabb(boundary);
+    let intersects_edges = polygon.edges_intersect_aabb(boundary);
 
-    // Stop subdividing if cell is homogeneous, too small, or no remaining depth.
-    if depth == 0 || cell_width <= feature_size || all_inside || all_outside {
+    // Stop subdividing if cell is not in polygon, too small, or no remaining depth.
+    if cell_size <= feature_size || all_outside || !intersects_edges {
         return Cell {
             boundary: *boundary,
             children: None,
@@ -57,7 +50,6 @@ fn tesselate_impl(polygon: &Polygon, boundary: &AABB, depth: usize, feature_size
                 new_half_width,
                 new_half_height,
             ),
-            depth - 1,
             feature_size,
         ),
         tesselate_impl(
@@ -70,7 +62,6 @@ fn tesselate_impl(polygon: &Polygon, boundary: &AABB, depth: usize, feature_size
                 new_half_width,
                 new_half_height,
             ),
-            depth - 1,
             feature_size,
         ),
         tesselate_impl(
@@ -83,7 +74,6 @@ fn tesselate_impl(polygon: &Polygon, boundary: &AABB, depth: usize, feature_size
                 new_half_width,
                 new_half_height,
             ),
-            depth - 1,
             feature_size,
         ),
         tesselate_impl(
@@ -96,7 +86,6 @@ fn tesselate_impl(polygon: &Polygon, boundary: &AABB, depth: usize, feature_size
                 new_half_width,
                 new_half_height,
             ),
-            depth - 1,
             feature_size,
         ),
     ];
@@ -114,23 +103,13 @@ mod tests {
     use crate::quad_mesh::polygon::Polygon;
 
     #[test]
-    fn test_tesselate_rect_leaf() {
-        // Use the rectangle polygon: its bounding box matches the polygon.
-        let polygon = Polygon::new_rect(0.0, 0.0, 10.0, 10.0);
-        let cell = tesselate(&polygon, 0, 0.5);
-        // Should be homogeneous, so no subdivision.
-        assert!(cell.children.is_none());
-    }
-
-    #[test]
     fn test_tesselate_rect_one_sub() {
         // Use the rectangle polygon: its bounding box matches the polygon.
         let polygon = Polygon::new_rect(0.0, 0.0, 10.0, 10.0);
-        let cell = tesselate(&polygon, 1, 0.5);
+        let cell = tesselate(&polygon, 5.0);
         // Should be homogeneous, so no subdivision.
         assert!(cell
-            .children
-            .is_some_and(|c| c.iter().all(|c| c.children.is_none())));
+            .children.iter().all(|c| c.is_none()));
     }
 
     #[test]
@@ -150,8 +129,8 @@ mod tests {
             vertices.push(i);
         }
         let polygon = Polygon::new(vertex_buffer, vertices).unwrap();
-        let cell = tesselate(&polygon, 5, 0.5);
+        let cell = tesselate(&polygon, 0.5);
         // Expect subdivision because the bounding box is larger than the circle.
-        assert!(cell.children.is_some());
+        assert!(!cell.children.is_empty());
     }
 }
