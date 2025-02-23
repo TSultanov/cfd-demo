@@ -3,30 +3,30 @@
 use super::{aabb::AABB, point::Point, polygon::Polygon};
 
 #[derive(Clone)]
-pub struct Cell {
+pub struct QuadTree {
     pub boundary: AABB,
-    pub children: Option<Box<[Cell; 4]>>,
+    pub children: Option<Box<[QuadTree; 4]>>,
 }
 
-impl Cell {
+impl QuadTree {
     pub fn is_leaf(&self) -> bool {
         self.children.is_none()
     }
 }
 
-pub fn tesselate(polygon: &Polygon, feature_size: f32, max_cell_size: f32) -> Cell {
+pub fn tesselate(polygon: &Polygon, feature_size: f32, max_cell_size: f32) -> QuadTree {
     tesselate_impl(polygon, &polygon.bounding_square(), feature_size, max_cell_size)
 }
 
 // New function: adaptive quadtree meshing based on polygon edges.
-fn tesselate_impl(polygon: &Polygon, boundary: &AABB, feature_size: f32, max_cell_size: f32) -> Cell {
+fn tesselate_impl(polygon: &Polygon, boundary: &AABB, feature_size: f32, max_cell_size: f32) -> QuadTree {
     let cell_size = boundary.width().min(boundary.height());
 
     let intersects_edges = polygon.edges_intersect_aabb(boundary);
 
     // Stop subdividing if cell is not in polygon, too small, or no remaining depth.
     if (cell_size <= feature_size || !intersects_edges) && cell_size <= max_cell_size {
-        return Cell {
+        return QuadTree {
             boundary: *boundary,
             children: None,
         };
@@ -93,7 +93,7 @@ fn tesselate_impl(polygon: &Polygon, boundary: &AABB, feature_size: f32, max_cel
         ),
     ];
 
-    Cell {
+    QuadTree {
         boundary: *boundary,
         children: Some(Box::new(cells)),
     }

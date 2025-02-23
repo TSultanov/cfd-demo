@@ -1,4 +1,4 @@
-use crate::quad_mesh::mesh::{tesselate, Cell};
+use crate::quad_mesh::quad_tree::{tesselate, QuadTree};
 use crate::quad_mesh::point::Point;
 use crate::quad_mesh::polygon::Polygon;
 use crate::utils::polygon_rasterizer::PolygonRasterizer;
@@ -26,7 +26,7 @@ pub struct MeshView {
     sketch_texture: Option<egui::TextureHandle>,
     mesh_texture: Option<egui::TextureHandle>,
 
-    mesh: Option<Cell>,
+    mesh: Option<QuadTree>,
     mesh_params: MeshParams,
 }
 

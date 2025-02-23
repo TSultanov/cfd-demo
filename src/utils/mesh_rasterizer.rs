@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 use crate::quad_mesh::aabb::AABB;
-use crate::quad_mesh::mesh::Cell;
+use crate::quad_mesh::quad_tree::QuadTree;
 use crate::utils::drawing::draw_line;
 
-pub fn rasterize_mesh_no_background(mesh: &Cell, width: usize, height: usize) -> egui::ColorImage {
+pub fn rasterize_mesh_no_background(mesh: &QuadTree, width: usize, height: usize) -> egui::ColorImage {
     let mut pixels = vec![egui::Color32::TRANSPARENT; width * height];
     rasterize_mesh_impl(mesh, width, height, &mut pixels, mesh.boundary);
     egui::ColorImage {
@@ -12,7 +12,7 @@ pub fn rasterize_mesh_no_background(mesh: &Cell, width: usize, height: usize) ->
     }
 }
 
-pub fn rasterize_mesh(mesh: &Cell, background: egui::ColorImage, bbox: AABB) -> egui::ColorImage {
+pub fn rasterize_mesh(mesh: &QuadTree, background: egui::ColorImage, bbox: AABB) -> egui::ColorImage {
     let mut pixels = background.pixels;
     rasterize_mesh_impl(mesh, background.size[0], background.size[1], &mut pixels, bbox);
     egui::ColorImage {
@@ -22,7 +22,7 @@ pub fn rasterize_mesh(mesh: &Cell, background: egui::ColorImage, bbox: AABB) -> 
 }
 
 fn rasterize_mesh_impl(
-    cell: &Cell,
+    cell: &QuadTree,
     width: usize,
     height: usize,
     pixels_buffer: &mut [egui::Color32],
