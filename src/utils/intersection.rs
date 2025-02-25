@@ -40,6 +40,11 @@ pub fn do_intersect(p: &Point, q: &Point, a: &Point, b: &Point) -> bool {
 
 // Helper: compute intersection point of segment p-q with segment a-b
 pub fn line_segment_intersection(p: &Point, q: &Point, a: &Point, b: &Point) -> Option<Point> {
+    // Check if the segments actually intersect by using the helper
+    if !do_intersect(p, q, a, b) {
+        return None;
+    }
+    
     let a1 = q.y - p.y;
     let b1 = p.x - q.x;
     let c1 = a1 * p.x + b1 * p.y;
@@ -50,30 +55,12 @@ pub fn line_segment_intersection(p: &Point, q: &Point, a: &Point, b: &Point) -> 
     
     let det = a1 * b2 - a2 * b1;
     if det.abs() < std::f64::EPSILON {
-        return None; // lines are parallel
+        return None; // Lines are parallel (or collinear) so no unique intersection point.
     }
+    
     let x = (b2 * c1 - b1 * c2) / det;
     let y = (a1 * c2 - a2 * c1) / det;
     
-    // Calculate parametric positions using vector projections
-    let dx1 = q.x - p.x;
-    let dy1 = q.y - p.y;
-    let t_numerator = (x - p.x) * dx1 + (y - p.y) * dy1;
-    let t_denominator = dx1 * dx1 + dy1 * dy1;
-    let t = t_numerator / t_denominator;
-
-    let dx2 = b.x - a.x;
-    let dy2 = b.y - a.y;
-    let u_numerator = (x - a.x) * dx2 + (y - a.y) * dy2;
-    let u_denominator = dx2 * dx2 + dy2 * dy2;
-    let u = u_numerator / u_denominator;
-
-    // Use relative epsilon checks for parametric positions
-    const EPS: f64 = std::f64::EPSILON;
-    if t < -EPS || t > 1.0 + EPS || u < -EPS || u > 1.0 + EPS {
-        return None;
-    }
-
     Some(Point { x, y })
 }
 
@@ -90,59 +77,51 @@ pub fn intersect_quad_edge(quad: &Quad, p1: &Point, p2: &Point) -> Vec<Point> {
         let v1 = &vertices[i];
         let v2 = &vertices[j];
         
-        // First check if segments intersect using the faster do_intersect
-        if do_intersect(p1, p2, v1, v2) {
-            // Special case: if the quad edge and the input edge are collinear,
-            // compute the overlapping segment.
-            if orientation(p1, p2, v1) == 0 && orientation(p1, p2, v2) == 0 {
-                let d_x = p2.x - p1.x;
-                let d_y = p2.y - p1.y;
-                let norm = d_x * d_x + d_y * d_y;
-                // If p1-p2 is degenerate, skip the collinear logic.
-                if norm.abs() < std::f64::EPSILON {
-                    continue;
-                }
-                // Compute the projection parameters of v1 and v2 on the line p1->p2.
-                let t_v1 = ((v1.x - p1.x) * d_x + (v1.y - p1.y) * d_y) / norm;
-                let t_v2 = ((v2.x - p1.x) * d_x + (v2.y - p1.y) * d_y) / norm;
-                // The overlapping interval on p1-p2 is from max(0.0, min(t_v1,t_v2))
-                // to min(1.0, max(t_v1, t_v2))
-                let t_start = t_v1.min(t_v2).max(0.0);
-                let t_end = t_v1.max(t_v2).min(1.0);
-                if t_start <= t_end + std::f64::EPSILON {
-                    let overlap_start = Point { x: p1.x + t_start * d_x, y: p1.y + t_start * d_y };
-                    let overlap_end   = Point { x: p1.x + t_end   * d_x, y: p1.y + t_end   * d_y };
-                    // Avoid duplicates (e.g. at corners)
-                    if !intersections.iter().any(|p: &Point| 
-                        (p.x - overlap_start.x).abs() < std::f64::EPSILON && 
-                        (p.y - overlap_start.y).abs() < std::f64::EPSILON
-                    ) {
-                        intersections.push(overlap_start);
-                    }
-                    if !intersections.iter().any(|p: &Point| 
-                        (p.x - overlap_end.x).abs() < std::f64::EPSILON && 
-                        (p.y - overlap_end.y).abs() < std::f64::EPSILON
-                    ) {
-                        intersections.push(overlap_end);
-                    }
-                    // Continue to the next quad edge.
-                    continue;
-                }
+        // Special case: if the quad edge and the input edge are collinear,
+        // compute the overlapping segment.
+        if orientation(p1, p2, v1) == 0 && orientation(p1, p2, v2) == 0 {
+            let d_x = p2.x - p1.x;
+            let d_y = p2.y - p1.y;
+            let norm = d_x * d_x + d_y * d_y;
+            // If p1-p2 is degenerate, skip the collinear logic.
+            if norm.abs() < std::f64::EPSILON {
+                continue;
             }
-            
-            if let Some(intersection) = line_segment_intersection(p1, p2, v1, v2) {
-                // Check if this intersection is already in our list (avoid duplicates at corners)
+            // Compute the projection parameters of v1 and v2 on the line p1->p2.
+            let t_v1 = ((v1.x - p1.x) * d_x + (v1.y - p1.y) * d_y) / norm;
+            let t_v2 = ((v2.x - p1.x) * d_x + (v2.y - p1.y) * d_y) / norm;
+            // The overlapping interval on p1-p2 is from max(0.0, min(t_v1,t_v2))
+            // to min(1.0, max(t_v1, t_v2))
+            let t_start = t_v1.min(t_v2).max(0.0);
+            let t_end = t_v1.max(t_v2).min(1.0);
+            if t_start <= t_end + std::f64::EPSILON {
+                let overlap_start = Point { x: p1.x + t_start * d_x, y: p1.y + t_start * d_y };
+                let overlap_end   = Point { x: p1.x + t_end   * d_x, y: p1.y + t_end   * d_y };
+                // Avoid duplicates (e.g. at corners)
                 if !intersections.iter().any(|p: &Point| 
-                    (p.x - intersection.x).abs() < std::f64::EPSILON && 
-                    (p.y - intersection.y).abs() < std::f64::EPSILON
+                    (p.x - overlap_start.x).abs() < std::f64::EPSILON && 
+                    (p.y - overlap_start.y).abs() < std::f64::EPSILON
                 ) {
-                    intersections.push(intersection);
+                    intersections.push(overlap_start);
                 }
-            } else {
-                // This should never happen - if do_intersect returns true,
-                // then line_segment_intersection must find an intersection point.
-                // panic!("Geometric inconsistency: Segments {:?}-{:?} and {:?}-{:?} reported intersection but no point found", 
-                //    p1, p2, v1, v2);
+                if !intersections.iter().any(|p: &Point| 
+                    (p.x - overlap_end.x).abs() < std::f64::EPSILON && 
+                    (p.y - overlap_end.y).abs() < std::f64::EPSILON
+                ) {
+                    intersections.push(overlap_end);
+                }
+                // Continue to the next quad edge.
+                continue;
+            }
+        }
+        
+        if let Some(intersection) = line_segment_intersection(p1, p2, v1, v2) {
+            // Check if this intersection is already in our list (avoid duplicates at corners)
+            if !intersections.iter().any(|p: &Point| 
+                (p.x - intersection.x).abs() < std::f64::EPSILON && 
+                (p.y - intersection.y).abs() < std::f64::EPSILON
+            ) {
+                intersections.push(intersection);
             }
         }
     }
