@@ -3,6 +3,40 @@ use crate::quad_mesh::polygon::Polygon;
 
 use super::aabb::AABB;
 
+/// Represents a quadrilateral defined by its four vertices.
+pub struct Quad {
+    pub bottom_left: Point,
+    pub bottom_right: Point,
+    pub top_right: Point,
+    pub top_left: Point,
+}
+
+impl Quad {
+    /// Constructs a new `Quad` given the center and half dimensions.
+    pub fn new_rect(center: &Point, half_width: f32, half_height: f32) -> Self {
+        let left = center.x - half_width;
+        let right = center.x + half_width;
+        let bottom = center.y - half_height;
+        let top = center.y + half_height;
+        Quad {
+            bottom_left: Point { x: left, y: bottom },
+            bottom_right: Point { x: right, y: bottom },
+            top_right: Point { x: right, y: top },
+            top_left: Point { x: left, y: top },
+        }
+    }
+    
+    /// Returns an array of all vertices in counter-clockwise order starting from bottom-left.
+    pub fn vertices(&self) -> [Point; 4] {
+        [
+            self.bottom_left,
+            self.bottom_right,
+            self.top_right,
+            self.top_left,
+        ]
+    }
+}
+
 /// Mesh data structure based on quad tree mesh in structure-of-arrays format.
 pub struct Mesh {
     // Cell centers
@@ -27,8 +61,7 @@ pub struct Mesh {
 
 pub struct Cell<'a> {
     pub center: Point,
-    pub width: f32,
-    pub height: f32,
+    pub quad: Quad,
     pub neighbors: Neighbors<'a>
 }
 
@@ -188,11 +221,13 @@ impl Mesh {
             y: self.cell_centers_y[cell_index],
         };
 
-        // Compute full cell width and height.
-        let full_width = 2.0 * self.cell_half_width[cell_index];
-        let full_height = 2.0 * self.cell_half_height[cell_index];
+        // Retrieve half dimensions (note: these are already stored per cell).
+        let half_width = self.cell_half_width[cell_index];
+        let half_height = self.cell_half_height[cell_index];
+        // Construct the explicit quad from the cell center and half dimensions.
+        let quad = Quad::new_rect(&center, half_width, half_height);
 
-        // Retrieve neighbors for each face by slicing the neighbors indexes using the range.
+        // Retrieve neighbors for each face by slicing the neighbor indexes using the appropriate range.
         let (east_start, east_end) = self.neighbors_east_range[cell_index];
         let east_neighbors = &self.neighbors_east_indexes[east_start..east_end];
 
@@ -215,9 +250,8 @@ impl Mesh {
 
         let cell = Cell {
             center,
-            width: full_width,
-            height: full_height,
-            neighbors: neighbors,
+            quad,
+            neighbors,
         };
 
         // Call the closure with the information about the cell.
@@ -246,47 +280,34 @@ impl Mesh {
             };
         }
 
-        let mut min_x = 0.0;
-        let mut max_x = 0.0;
-        let mut min_y = 0.0;
-        let mut max_y = 0.0;
-        let mut initialized = false;
+        let mut min_x = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
 
         self.visit_all_cells(|cell| {
-            // For each cell, compute half dimensions.
-            let half_w = cell.width * 0.5;
-            let half_h = cell.height * 0.5;
+            // Compare all four vertices in the quad.
+            let vertices = cell.quad.vertices();
+            let cell_min_x = vertices.iter().fold(f32::INFINITY, |acc, v| acc.min(v.x));
+            let cell_max_x = vertices.iter().fold(f32::NEG_INFINITY, |acc, v| acc.max(v.x));
+            let cell_min_y = vertices.iter().fold(f32::INFINITY, |acc, v| acc.min(v.y));
+            let cell_max_y = vertices.iter().fold(f32::NEG_INFINITY, |acc, v| acc.max(v.y));
 
-            // Determine the cell's boundaries.
-            let cell_min_x = cell.center.x - half_w;
-            let cell_max_x = cell.center.x + half_w;
-            let cell_min_y = cell.center.y - half_h;
-            let cell_max_y = cell.center.y + half_h;
-
-            // Initialize or update the global boundaries.
-            if !initialized {
+            if cell_min_x < min_x {
                 min_x = cell_min_x;
+            }
+            if cell_max_x > max_x {
                 max_x = cell_max_x;
+            }
+            if cell_min_y < min_y {
                 min_y = cell_min_y;
+            }
+            if cell_max_y > max_y {
                 max_y = cell_max_y;
-                initialized = true;
-            } else {
-                if cell_min_x < min_x {
-                    min_x = cell_min_x;
-                }
-                if cell_max_x > max_x {
-                    max_x = cell_max_x;
-                }
-                if cell_min_y < min_y {
-                    min_y = cell_min_y;
-                }
-                if cell_max_y > max_y {
-                    max_y = cell_max_y;
-                }
             }
         });
 
-        // Compute the overall center and half dimensions of the bounding box.
+        // Compute overall center and half dimensions of the bounding box.
         let center_x = 0.5 * (min_x + max_x);
         let center_y = 0.5 * (min_y + max_y);
         let half_width = 0.5 * (max_x - min_x);

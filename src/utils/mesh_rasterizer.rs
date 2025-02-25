@@ -34,24 +34,18 @@ fn rasterize_mesh_impl(mesh: &Mesh, width: usize, height: usize, pixels_buffer: 
 
     // Visit every cell in the mesh.
     mesh.visit_all_cells(|cell| {
-        // For the current cell we compute its top left and bottom right coordinates.
-        let half_width = cell.width / 2.0;
-        let half_height = cell.height / 2.0;
-        let poly_cell_top_left_x = cell.center.x - half_width;
-        let poly_cell_top_left_y = cell.center.y - half_height;
-        let poly_cell_bottom_right_x = cell.center.x + half_width;
-        let poly_cell_bottom_right_y = cell.center.y + half_height;
+        // Get the explicit vertices from the cell's quad.
+        let vertices = cell.quad.vertices();
 
-        // Convert the cell boundary positions to their corresponding pixel coordinates.
-        let x0 = poly_x_to_x(poly_cell_top_left_x);
-        let y0 = poly_y_to_y(poly_cell_top_left_y);
-        let x1 = poly_x_to_x(poly_cell_bottom_right_x);
-        let y1 = poly_y_to_y(poly_cell_bottom_right_y);
-
-        // Draw the four edges of the cell.
-        draw_line(pixels_buffer, width, height, x0, y0, x1, y0, egui::Color32::BLACK);
-        draw_line(pixels_buffer, width, height, x1, y0, x1, y1, egui::Color32::BLACK);
-        draw_line(pixels_buffer, width, height, x1, y1, x0, y1, egui::Color32::BLACK);
-        draw_line(pixels_buffer, width, height, x0, y1, x0, y0, egui::Color32::BLACK);
+        // Draw the cell outline by drawing a line between each consecutive pair of vertices.
+        for i in 0..vertices.len() {
+            let start = vertices[i];
+            let end = vertices[(i + 1) % vertices.len()];
+            let x0 = poly_x_to_x(start.x);
+            let y0 = poly_y_to_y(start.y);
+            let x1 = poly_x_to_x(end.x);
+            let y1 = poly_y_to_y(end.y);
+            draw_line(pixels_buffer, width, height, x0, y0, x1, y1, egui::Color32::BLACK);
+        }
     });
 }

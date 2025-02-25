@@ -5,7 +5,6 @@ use crate::quad_mesh::polygon::Polygon;
 use crate::utils::mesh_rasterizer::{rasterize_mesh, rasterize_mesh_no_background};
 use crate::utils::polygon_rasterizer::PolygonRasterizer;
 use std::rc::Rc;
-use crate::utils::quad_tree_rasterizer::{rasterize_quad_tree, rasterize_quad_tree_no_background};
 
 pub struct MeshParams {
     pub feature_size: f32,
@@ -111,7 +110,7 @@ impl MeshView {
             ui.image((texture.id(), img_size));
         }
 
-        if let(Some(mesh)) = &self.mesh {
+        if let Some(mesh) = &self.mesh {
             let available_size = ui.available_rect_before_wrap().size();
             let bbox = mesh.full_bounding_box();
             let domain_aspect = bbox.width() / bbox.height();
