@@ -39,7 +39,7 @@ impl Polygon {
         })
     }
 
-    pub fn new_rect(x: f32, y: f32, w: f32, h: f32) -> Self {
+    pub fn new_rect(x: f64, y: f64, w: f64, h: f64) -> Self {
         let vertex_buffer = vec![
             Point { x, y },
             Point { x: x + w, y },
@@ -51,11 +51,11 @@ impl Polygon {
         Self::new(vertex_buffer, vertices).unwrap()
     }
 
-    pub fn new_polygon(center: Point, radius: f32, n: usize, start_angle: f32) -> Self {
+    pub fn new_polygon(center: Point, radius: f64, n: usize, start_angle: f64) -> Self {
         let mut vertex_buffer = Vec::new();
         let mut vertices = Vec::new();
         for i in 0..n {
-            let theta = (i as f32) * std::f32::consts::TAU / (n as f32) + start_angle;
+            let theta = (i as f64) * std::f64::consts::TAU / (n as f64) + start_angle;
             let x = center.x + radius * theta.cos();
             let y = center.y + radius * theta.sin();
             vertex_buffer.push(Point { x, y });
@@ -136,17 +136,17 @@ impl Polygon {
 
     fn is_point_on_segment(p: &Point, a: &Point, b: &Point) -> bool {
         let cross = (b.y - a.y) * (p.x - a.x) - (b.x - a.x) * (p.y - a.y);
-        if cross.abs() > std::f32::EPSILON {
+        if cross.abs() > std::f64::EPSILON {
             return false;
         }
         let min_x = a.x.min(b.x);
         let max_x = a.x.max(b.x);
         let min_y = a.y.min(b.y);
         let max_y = a.y.max(b.y);
-        p.x >= min_x - std::f32::EPSILON
-            && p.x <= max_x + std::f32::EPSILON
-            && p.y >= min_y - std::f32::EPSILON
-            && p.y <= max_y + std::f32::EPSILON
+        p.x >= min_x - std::f64::EPSILON
+            && p.x <= max_x + std::f64::EPSILON
+            && p.y >= min_y - std::f64::EPSILON
+            && p.y <= max_y + std::f64::EPSILON
     }
 
     pub fn bounding_box(&self) -> AABB {
@@ -154,22 +154,22 @@ impl Polygon {
             .vertex_buffer
             .iter()
             .map(|p| p.x)
-            .fold(std::f32::INFINITY, f32::min);
+            .fold(std::f64::INFINITY, f64::min);
         let max_x = self
             .vertex_buffer
             .iter()
             .map(|p| p.x)
-            .fold(std::f32::NEG_INFINITY, f32::max);
+            .fold(std::f64::NEG_INFINITY, f64::max);
         let min_y = self
             .vertex_buffer
             .iter()
             .map(|p| p.y)
-            .fold(std::f32::INFINITY, f32::min);
+            .fold(std::f64::INFINITY, f64::min);
         let max_y = self
             .vertex_buffer
             .iter()
             .map(|p| p.y)
-            .fold(std::f32::NEG_INFINITY, f32::max);
+            .fold(std::f64::NEG_INFINITY, f64::max);
         let center = Point {
             x: (min_x + max_x) / 2.0,
             y: (min_y + max_y) / 2.0,

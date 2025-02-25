@@ -1,5 +1,6 @@
 use crate::quad_mesh::{quad_tree::QuadTree, point::Point};
 use crate::quad_mesh::polygon::Polygon;
+use crate::utils::intersection::intersect_quad_edge;
 
 use super::aabb::AABB;
 use super::quad::Quad;
@@ -7,11 +8,11 @@ use super::quad::Quad;
 /// Mesh data structure based on quad tree mesh in structure-of-arrays format.
 pub struct Mesh {
     // Cell centers
-    pub cell_centers_x: Vec<f32>,
-    pub cell_centers_y: Vec<f32>,
+    pub cell_centers_x: Vec<f64>,
+    pub cell_centers_y: Vec<f64>,
     // Cell half sizes
-    pub cell_half_width: Vec<f32>,
-    pub cell_half_height: Vec<f32>,
+    pub cell_half_width: Vec<f64>,
+    pub cell_half_height: Vec<f64>,
     // Neighbors for east face: ranges and flat list of indices.
     pub neighbors_east_range: Vec<(usize, usize)>,
     pub neighbors_east_indexes: Vec<usize>,
@@ -24,12 +25,17 @@ pub struct Mesh {
     // Neighbors for south face.
     pub neighbors_south_range: Vec<(usize, usize)>,
     pub neighbors_south_indexes: Vec<usize>,
+    // Intersections between cell edges and polygon edges
+    pub cell_intersections_range: Vec<(usize, usize)>,
+    pub cell_intersections_points: Vec<Point>,
 }
 
 pub struct Cell<'a> {
     pub center: Point,
     pub quad: Quad,
-    pub neighbors: Neighbors<'a>
+    pub neighbors: Neighbors<'a>,
+    // Newly added field: intersections between cell edges and polygon edges.
+    pub intersections: &'a [Point],
 }
 
 pub struct Neighbors<'a> {
@@ -76,7 +82,7 @@ impl Mesh {
         let mut cell_half_width = Vec::with_capacity(num_cells);
         let mut cell_half_height = Vec::with_capacity(num_cells);
         // Store boundaries for neighbor search: (xmin, xmax, ymin, ymax).
-        let mut boundaries: Vec<(f32, f32, f32, f32)> = Vec::with_capacity(num_cells);
+        let mut boundaries: Vec<(f64, f64, f64, f64)> = Vec::with_capacity(num_cells);
 
         for cell in &valid_cells {
             cell_centers_x.push(cell.center.x);
@@ -162,6 +168,46 @@ impl Mesh {
             neighbors_south_range.push((start, end));
         }
 
+        // Compute intersections between each cell and polygon edges
+        let mut temp_cell_intersections = vec![Vec::new(); num_cells];
+        
+        // For each cell, compute intersections with all polygon edges
+        for i in 0..num_cells {
+            let center = Point {
+                x: cell_centers_x[i],
+                y: cell_centers_y[i],
+            };
+            
+            let quad = Quad::new_rect(&center, cell_half_width[i], cell_half_height[i]);
+            
+            let polygon_edges = polygon.edges();
+            for edge in polygon_edges {
+                let (p1, p2) = edge;
+                let intersections = intersect_quad_edge(&quad, &p1, &p2);
+                temp_cell_intersections[i].extend(intersections);
+            }
+
+            for hole in &polygon.holes {
+                let hole_edges = hole.edges();
+                for edge in hole_edges {
+                    let (p1, p2) = edge;
+                    let intersections = intersect_quad_edge(&quad, &p1, &p2);
+                    temp_cell_intersections[i].extend(intersections);
+                }
+            }
+        }
+        
+        // Flatten the intersections and compute ranges
+        let mut cell_intersections_points = Vec::new();
+        let mut cell_intersections_range = Vec::with_capacity(num_cells);
+        
+        for cell_ints in &temp_cell_intersections {
+            let start = cell_intersections_points.len();
+            cell_intersections_points.extend(cell_ints.iter().cloned());
+            let end = cell_intersections_points.len();
+            cell_intersections_range.push((start, end));
+        }
+
         Mesh {
             cell_centers_x,
             cell_centers_y,
@@ -175,9 +221,12 @@ impl Mesh {
             neighbors_north_indexes,
             neighbors_south_range,
             neighbors_south_indexes,
+            cell_intersections_range,
+            cell_intersections_points,
         }
     }
 
+    /// Creates a cell view for a given cell index, bundling its quad, neighbors, and intersection points.
     pub fn visit_cell<F>(&self, cell_index: usize, mut visit: F)
     where
         F: FnMut(&Cell),
@@ -215,10 +264,14 @@ impl Mesh {
             south: south_neighbors,
         };
 
+        // Retrieve intersections for the cell.
+        let intersections = self.cell_geometry_intersections(cell_index);
+
         let cell = Cell {
             center,
             quad,
             neighbors,
+            intersections,
         };
 
         // Call the closure with the information about the cell.
@@ -247,18 +300,18 @@ impl Mesh {
             };
         }
 
-        let mut min_x = f32::INFINITY;
-        let mut max_x = f32::NEG_INFINITY;
-        let mut min_y = f32::INFINITY;
-        let mut max_y = f32::NEG_INFINITY;
+        let mut min_x = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
 
         self.visit_all_cells(|cell| {
             // Compare all four vertices in the quad.
             let vertices = cell.quad.vertices();
-            let cell_min_x = vertices.iter().fold(f32::INFINITY, |acc, v| acc.min(v.x));
-            let cell_max_x = vertices.iter().fold(f32::NEG_INFINITY, |acc, v| acc.max(v.x));
-            let cell_min_y = vertices.iter().fold(f32::INFINITY, |acc, v| acc.min(v.y));
-            let cell_max_y = vertices.iter().fold(f32::NEG_INFINITY, |acc, v| acc.max(v.y));
+            let cell_min_x = vertices.iter().fold(f64::INFINITY, |acc, v| acc.min(v.x));
+            let cell_max_x = vertices.iter().fold(f64::NEG_INFINITY, |acc, v| acc.max(v.x));
+            let cell_min_y = vertices.iter().fold(f64::INFINITY, |acc, v| acc.min(v.y));
+            let cell_max_y = vertices.iter().fold(f64::NEG_INFINITY, |acc, v| acc.max(v.y));
 
             if cell_min_x < min_x {
                 min_x = cell_min_x;
@@ -286,13 +339,19 @@ impl Mesh {
             half_height,
         }
     }
+
+    /// Returns a slice of points representing the intersections between the cell's edges and polygon edges
+    pub fn cell_geometry_intersections(&self, cell_idx: usize) -> &[Point] {
+        let (start, end) = self.cell_intersections_range[cell_idx];
+        &self.cell_intersections_points[start..end]
+    }
 }
 
 // Helper cell information extracted from a quad tree leaf.
 struct TmpCell {
     center: Point,
-    half_width: f32,
-    half_height: f32,
+    half_width: f64,
+    half_height: f64,
 }
 
 /// Recursively gather quad tree leaves.

@@ -14,12 +14,12 @@ impl QuadTree {
     }
 }
 
-pub fn tesselate(polygon: &Polygon, feature_size: f32, max_cell_size: f32) -> QuadTree {
+pub fn tesselate(polygon: &Polygon, feature_size: f64, max_cell_size: f64) -> QuadTree {
     tesselate_impl(polygon, &polygon.bounding_square(), feature_size, max_cell_size)
 }
 
 // New function: adaptive quadtree meshing based on polygon edges.
-fn tesselate_impl(polygon: &Polygon, boundary: &AABB, feature_size: f32, max_cell_size: f32) -> QuadTree {
+fn tesselate_impl(polygon: &Polygon, boundary: &AABB, feature_size: f64, max_cell_size: f64) -> QuadTree {
     let cell_size = boundary.width().min(boundary.height());
 
     let intersects_edges = polygon.edges_intersect_aabb(boundary);
@@ -122,7 +122,7 @@ mod tests {
         let mut vertices = Vec::new();
         let n = 8;
         for i in 0..n {
-            let theta = (i as f32) * std::f32::consts::TAU / (n as f32);
+            let theta = (i as f64) * std::f64::consts::TAU / (n as f64);
             let pt = Point {
                 x: center.x + 4.0 * theta.cos(),
                 y: center.y + 4.0 * theta.sin(),

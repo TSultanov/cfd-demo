@@ -9,8 +9,18 @@ pub struct Quad {
 }
 
 impl Quad {
+    /// Constructs a new `Quad` from four arbitrary vertices.
+    pub fn new(bottom_left: Point, bottom_right: Point, top_right: Point, top_left: Point) -> Self {
+        Quad {
+            bottom_left,
+            bottom_right,
+            top_right,
+            top_left,
+        }
+    }
+
     /// Constructs a new `Quad` given the center and half dimensions.
-    pub fn new_rect(center: &Point, half_width: f32, half_height: f32) -> Self {
+    pub fn new_rect(center: &Point, half_width: f64, half_height: f64) -> Self {
         let left = center.x - half_width;
         let right = center.x + half_width;
         let bottom = center.y - half_height;

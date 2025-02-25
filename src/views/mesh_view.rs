@@ -7,8 +7,8 @@ use crate::utils::polygon_rasterizer::PolygonRasterizer;
 use std::rc::Rc;
 
 pub struct MeshParams {
-    pub feature_size: f32,
-    pub max_cell_size: f32,
+    pub feature_size: f64,
+    pub max_cell_size: f64,
 }
 
 impl Default for MeshParams {
@@ -75,13 +75,13 @@ impl MeshView {
         let available_size = ui.available_rect_before_wrap().size();
         let bbox = self.sketch.bounding_box();
         let domain_aspect = bbox.width() / bbox.height();
-        let available_aspect = available_size.x / available_size.y;
+        let available_aspect = (available_size.x / available_size.y) as f64;
         let (img_width, img_height) = if available_aspect > domain_aspect {
-            (available_size.y * domain_aspect, available_size.y)
+            (available_size.y as f64 * domain_aspect, available_size.y as f64)
         } else {
-            (available_size.x, available_size.x / domain_aspect)
+            (available_size.x as f64, available_size.x as f64 / domain_aspect)
         };
-        let img_size = egui::Vec2::new(img_width, img_height);
+        let img_size = egui::Vec2::new(img_width as f32, img_height as f32);
 
         let image = self
             .sketch_rasterizer
@@ -114,13 +114,13 @@ impl MeshView {
             let available_size = ui.available_rect_before_wrap().size();
             let bbox = mesh.full_bounding_box();
             let domain_aspect = bbox.width() / bbox.height();
-            let available_aspect = available_size.x / available_size.y;
+            let available_aspect = (available_size.x / available_size.y) as f64;
             let (img_width, img_height) = if available_aspect > domain_aspect {
-                (available_size.y * domain_aspect, available_size.y)
+                (available_size.y as f64 * domain_aspect, available_size.y as f64)
             } else {
-                (available_size.x, available_size.x / domain_aspect)
+                (available_size.x as f64, available_size.x as f64 / domain_aspect)
             };
-            let img_size = egui::Vec2::new(img_width, img_height);
+            let img_size = egui::Vec2::new(img_width as f32, img_height as f32);
 
             let mesh_image = rasterize_mesh_no_background(mesh, img_width as usize, img_height as usize, bbox);
 
@@ -144,7 +144,7 @@ fn default_polygon() -> Polygon {
         Point { x: 5.0, y: 5.0 },
         1.0,
         4,
-        std::f32::consts::TAU / 8.0,
+        std::f64::consts::TAU / 8.0,
     ))
     .unwrap();
 

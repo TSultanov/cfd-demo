@@ -4,12 +4,12 @@ use super::{point::Point, polygon::Polygon};
 #[derive(Debug, Clone, Copy)]
 pub struct AABB {
     pub center: Point,
-    pub half_width: f32,
-    pub half_height: f32,
+    pub half_width: f64,
+    pub half_height: f64,
 }
 
 impl AABB {
-    pub fn new(center: Point, half_width: f32, half_height: f32) -> Self {
+    pub fn new(center: Point, half_width: f64, half_height: f64) -> Self {
         AABB {
             center,
             half_width,
@@ -26,11 +26,11 @@ impl AABB {
         )
     }
 
-    pub fn width(&self) -> f32 {
+    pub fn width(&self) -> f64 {
         2.0 * self.half_width
     }
 
-    pub fn height(&self) -> f32 {
+    pub fn height(&self) -> f64 {
         2.0 * self.half_height
     }
 

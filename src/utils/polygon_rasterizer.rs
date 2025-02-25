@@ -49,12 +49,12 @@ fn rasterize_polygon(
 ) {
     let bbox = sketch.bounding_box();
 
-    let scale = ((width - 1) as f32 / bbox.width()).min((height - 1) as f32 / bbox.height());
+    let scale = ((width - 1) as f64 / bbox.width()).min((height - 1) as f64 / bbox.height());
 
-    let x_to_poly_x = |x: usize| x as f32 / scale + bbox.top_left().x;
-    let y_to_poly_y = |y: usize| y as f32 / scale + bbox.top_left().y;
-    let poly_x_to_x = |x: f32| ((x - bbox.top_left().x) * scale).floor() as usize;
-    let poly_y_to_y = |y: f32| ((y - bbox.top_left().y) * scale).floor() as usize;
+    let x_to_poly_x = |x: usize| x as f64 / scale + bbox.top_left().x;
+    let y_to_poly_y = |y: usize| y as f64 / scale + bbox.top_left().y;
+    let poly_x_to_x = |x: f64| ((x - bbox.top_left().x) * scale).floor() as usize;
+    let poly_y_to_y = |y: f64| ((y - bbox.top_left().y) * scale).floor() as usize;
 
     for y in 0..height {
         for x in 0..width {
