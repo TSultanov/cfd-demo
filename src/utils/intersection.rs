@@ -55,28 +55,25 @@ pub fn line_segment_intersection(p: &Point, q: &Point, a: &Point, b: &Point) -> 
     let x = (b2 * c1 - b1 * c2) / det;
     let y = (a1 * c2 - a2 * c1) / det;
     
-    println!("x: {x}, y: {y}");
-    
-    // Check if intersection lies on both segments.
-    if x < p.x.min(q.x) - std::f64::EPSILON || x > p.x.max(q.x) + std::f64::EPSILON {
-        println!("A: x={}, p.x={}, q.x={}, p.x-x={:.6e}, q.x-x={:.6e}", x, p.x, q.x, p.x - x, q.x - x);
+    // Calculate parametric positions using vector projections
+    let dx1 = q.x - p.x;
+    let dy1 = q.y - p.y;
+    let t_numerator = (x - p.x) * dx1 + (y - p.y) * dy1;
+    let t_denominator = dx1 * dx1 + dy1 * dy1;
+    let t = t_numerator / t_denominator;
+
+    let dx2 = b.x - a.x;
+    let dy2 = b.y - a.y;
+    let u_numerator = (x - a.x) * dx2 + (y - a.y) * dy2;
+    let u_denominator = dx2 * dx2 + dy2 * dy2;
+    let u = u_numerator / u_denominator;
+
+    // Use relative epsilon checks for parametric positions
+    const EPS: f64 = std::f64::EPSILON;
+    if t < -EPS || t > 1.0 + EPS || u < -EPS || u > 1.0 + EPS {
         return None;
     }
-    if x < a.x.min(b.x) - std::f64::EPSILON || x > a.x.max(b.x) + std::f64::EPSILON {
-        println!("B: x={}, x - a.x.min(b.x) = {:.6e}, x - a.x.max(b.x) = {:.6e}, eps = {:.6e}", 
-                 x, x - a.x.min(b.x), x - a.x.max(b.x), std::f64::EPSILON);
-        return None;
-    }
-    if y < p.y.min(q.y) - std::f64::EPSILON || y > p.y.max(q.y) + std::f64::EPSILON {
-        println!("C: y={}, p.y={}, q.y={}, p.y-y={:.6e}, q.y-y={:.6e}", 
-                 y, p.y, q.y, p.y - y, q.y - y);
-        return None;
-    }
-    if y < a.y.min(b.y) - std::f64::EPSILON || y > a.y.max(b.y) + std::f64::EPSILON {
-        println!("D: y={}, a.y={}, b.y={}, a.y-y={:.6e}, b.y-y={:.6e}",
-                 y, a.y, b.y, a.y - y, b.y - y);
-        return None;
-    }
+
     Some(Point { x, y })
 }
 
