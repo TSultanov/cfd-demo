@@ -109,7 +109,7 @@ mod tests {
     fn test_tesselate_rect_one_sub() {
         // Use the rectangle polygon: its bounding box matches the polygon.
         let polygon = Polygon::new_rect(0.0, 0.0, 10.0, 10.0);
-        let cell = tesselate(&polygon, 5.0);
+        let cell = tesselate(&polygon, 5.0, 5.0);
         assert!(cell
             .children.is_some_and(|children| children.iter().all(|child| child.is_leaf())));
     }
@@ -131,7 +131,7 @@ mod tests {
             vertices.push(i);
         }
         let polygon = Polygon::new(vertex_buffer, vertices).unwrap();
-        let cell = tesselate(&polygon, 0.5);
+        let cell = tesselate(&polygon, 0.5, 5.0);
         // Expect subdivision because the bounding box is larger than the circle.
         assert!(!cell.children.is_none());
     }
